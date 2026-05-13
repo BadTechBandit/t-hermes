@@ -70,6 +70,28 @@ main window created
 
 When the app opens, choose Hermes as the provider and start a session.
 
+### Electron Postinstall On Hardened npm Setups
+
+If your `~/.npmrc` sets `ignore-scripts=true` as supply-chain protection (a sensible default given recent npm-ecosystem zero-days), Bun reads that file and skips lifecycle scripts even for packages this repo lists in `trustedDependencies`. The Electron binary will not download, and `bun run dev:desktop` will fail with:
+
+```text
+Error: Electron failed to install correctly, please delete node_modules/electron and try installing again
+```
+
+Fix without weakening your global setting. Install with a per-command override:
+
+```bash
+npm_config_ignore_scripts=false bun install
+```
+
+Or, if you already ran `bun install` and just want to recover, run Electron's installer directly:
+
+```bash
+node node_modules/electron/install.js
+```
+
+If you do not have `ignore-scripts=true` set, you will not hit this and can skip the section.
+
 ## Agent Install Prompt
 
 If you want Claude Code, Codex, Hermes, or another local coding agent to do the setup for you, paste this:
@@ -86,8 +108,9 @@ Steps:
 3. Create a normal workspace folder such as `~/t-hermes-work`.
 4. Clone the repo into that folder.
 5. Run `bun install` inside the cloned `t-hermes` repo.
-6. Run `bun run dev:desktop`.
-7. If the app launches but Hermes is not detected, run `command -v hermes` and set that absolute path as the Hermes provider Binary path in the app settings.
+6. Verify the Electron binary downloaded. Confirm `node_modules/electron/dist/Electron.app` exists. If it is missing (common when `~/.npmrc` sets `ignore-scripts=true` for supply-chain protection), recover with `node node_modules/electron/install.js`, or rerun the install as `npm_config_ignore_scripts=false bun install`. Do not silently disable the user's global `ignore-scripts` setting.
+7. Run `bun run dev:desktop`.
+8. If the app launches but Hermes is not detected, run `command -v hermes` and set that absolute path as the Hermes provider Binary path in the app settings.
 
 Do not edit `~/.hermes`. T-Hermes should use the existing local Hermes install and config.
 ```
