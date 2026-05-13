@@ -36,6 +36,20 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("registers Hermes metadata and settings fields", () => {
+    const hermes = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("hermes")];
+
+    expect(hermes).toMatchObject({
+      label: "Hermes",
+      badgeLabel: "Experimental",
+    });
+    expect(deriveProviderSettingsFields(hermes!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "homePath",
+      "authMethodId",
+    ]);
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
     expect(opencode).toBeDefined();

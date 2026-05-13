@@ -123,6 +123,13 @@ function createBaseServerConfig(): ServerConfig {
           launchArgs: "",
         },
         cursor: { enabled: true, binaryPath: "", apiEndpoint: "", customModels: [] },
+        hermes: {
+          enabled: true,
+          binaryPath: "",
+          homePath: "",
+          authMethodId: "",
+          customModels: [],
+        },
         opencode: {
           enabled: true,
           binaryPath: "",

@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { DEFAULT_SERVER_SETTINGS, ServerSettings, ServerSettingsPatch } from "./settings.ts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  HermesSettings,
+  ServerSettings,
+  ServerSettingsPatch,
+} from "./settings.ts";
 
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
+const decodeHermesSettings = Schema.decodeUnknownSync(HermesSettings);
 
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
@@ -61,6 +67,39 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
         providerInstances: { "1bad": { driver: "codex" } },
       }),
     ).toThrow();
+  });
+});
+
+describe("HermesSettings", () => {
+  it("decodes minimal Hermes settings with local ACP defaults", () => {
+    expect(decodeHermesSettings({})).toEqual({
+      enabled: true,
+      binaryPath: "hermes",
+      homePath: "",
+      authMethodId: "",
+      customModels: [],
+    });
+  });
+
+  it("is present in legacy provider settings and patch schema", () => {
+    const settings = decodeServerSettings({});
+    expect(settings.providers.hermes.binaryPath).toBe("hermes");
+
+    const patch = decodeServerSettingsPatch({
+      providers: {
+        hermes: {
+          binaryPath: "  /usr/local/bin/hermes  ",
+          homePath: "  ~/.hermes-work  ",
+          authMethodId: "  openai-codex  ",
+        },
+      },
+    });
+
+    expect(patch.providers?.hermes).toEqual({
+      binaryPath: "/usr/local/bin/hermes",
+      homePath: "~/.hermes-work",
+      authMethodId: "openai-codex",
+    });
   });
 });
 

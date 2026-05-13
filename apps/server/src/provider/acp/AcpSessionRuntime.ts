@@ -41,6 +41,7 @@ export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
   readonly cwd: string;
   readonly resumeSessionId?: string;
+  readonly discardNonJsonStdoutLines?: boolean;
   readonly clientCapabilities?: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: {
     readonly name: string;
@@ -216,8 +217,15 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    const acpChild = options.discardNonJsonStdoutLines
+      ? {
+          ...child,
+          stdout: discardNonJsonStdoutLines(child.stdout),
+        }
+      : child;
+
     const acpContext = yield* Layer.build(
-      EffectAcpClient.layerChildProcess(child, {
+      EffectAcpClient.layerChildProcess(acpChild, {
         ...(options.protocolLogging?.logIncoming !== undefined
           ? { logIncoming: options.protocolLogging.logIncoming }
           : {}),
@@ -551,6 +559,40 @@ const makeAcpSessionRuntime = (
       notify: acp.raw.notify,
     } satisfies AcpSessionRuntimeShape;
   });
+
+const stdoutDecoder = new TextDecoder();
+const stdoutEncoder = new TextEncoder();
+
+function isJsonRpcLine(line: string): boolean {
+  const trimmed = line.trimStart();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+function discardNonJsonStdoutLines<E>(
+  stream: Stream.Stream<Uint8Array, E>,
+): Stream.Stream<Uint8Array, E> {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const pendingRef = yield* Ref.make("");
+      return stream.pipe(
+        Stream.mapEffect((chunk) =>
+          Ref.modify(pendingRef, (pending) => {
+            const text = pending + stdoutDecoder.decode(chunk, { stream: true });
+            const lines = text.split(/\r?\n/g);
+            const nextPending = lines.pop() ?? "";
+            const filtered = lines
+              .filter(isJsonRpcLine)
+              .map((line) => `${line}\n`)
+              .join("");
+            return [filtered, nextPending] as const;
+          }),
+        ),
+        Stream.filter((chunk) => chunk.length > 0),
+        Stream.map((chunk) => stdoutEncoder.encode(chunk)),
+      );
+    }),
+  );
+}
 
 function sessionConfigOptionsFromSetup(
   response:
