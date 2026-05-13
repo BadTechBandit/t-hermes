@@ -6,6 +6,7 @@ import {
   extractModelConfigId,
   mergeToolCallState,
   parsePermissionRequest,
+  parseSessionModelState,
   parseSessionModeState,
   parseSessionUpdateEvent,
 } from "./AcpRuntimeModel.ts";
@@ -57,6 +58,34 @@ describe("AcpRuntimeModel", () => {
     } satisfies EffectAcpSchema.NewSessionResponse);
 
     expect(modelConfigId).toBe("model");
+  });
+
+  it("parses session model state from typed ACP session setup responses", () => {
+    const modelState = parseSessionModelState({
+      sessionId: "session-1",
+      models: {
+        currentModelId: " openai-codex:gpt-5.5 ",
+        availableModels: [
+          {
+            modelId: " openai-codex:gpt-5.5 ",
+            name: " gpt-5.5 ",
+            description: " Provider: OpenAI Codex - current ",
+          },
+        ],
+      },
+      configOptions: [],
+    } satisfies EffectAcpSchema.NewSessionResponse);
+
+    expect(modelState).toEqual({
+      currentModelId: "openai-codex:gpt-5.5",
+      availableModels: [
+        {
+          id: "openai-codex:gpt-5.5",
+          name: "gpt-5.5",
+          description: "Provider: OpenAI Codex - current",
+        },
+      ],
+    });
   });
 
   it("projects typed ACP tool call updates into runtime events", () => {
@@ -239,6 +268,33 @@ describe("AcpRuntimeModel", () => {
               type: "text",
               text: "hello from acp",
             },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("projects typed ACP usage updates", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "usage_update",
+        size: 272000,
+        used: 11231,
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "UsageUpdated",
+        usedTokens: 11231,
+        maxTokens: 272000,
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "usage_update",
+            size: 272000,
+            used: 11231,
           },
         },
       },

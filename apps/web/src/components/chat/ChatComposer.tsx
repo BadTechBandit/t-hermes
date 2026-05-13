@@ -114,6 +114,7 @@ import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+const HERMES_PROVIDER = ProviderDriverKind.make("hermes");
 
 const runtimeModeConfig: Record<
   RuntimeMode,
@@ -1540,7 +1541,8 @@ export const ChatComposer = memo(
           return;
         }
         if (item.type === "skill") {
-          const replacement = `$${item.skill.name} `;
+          const skillPrefix = selectedProvider === HERMES_PROVIDER ? "/" : "$";
+          const replacement = `${skillPrefix}${item.skill.name} `;
           const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
             trigger.rangeEnd,
@@ -1558,7 +1560,12 @@ export const ChatComposer = memo(
           return;
         }
       },
-      [applyPromptReplacement, handleInteractionModeChange, resolveActiveComposerTrigger],
+      [
+        applyPromptReplacement,
+        handleInteractionModeChange,
+        resolveActiveComposerTrigger,
+        selectedProvider,
+      ],
     );
 
     const onComposerMenuItemHighlighted = useCallback(

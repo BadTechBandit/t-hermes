@@ -18,9 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = isDevelopment ? "T-Hermes (Dev)" : "T-Hermes (Alpha)";
-const APP_BUNDLE_ID = isDevelopment
-  ? "com.badtechbandit.thermes.dev"
-  : "com.badtechbandit.thermes";
+const APP_BUNDLE_ID = isDevelopment ? "com.badtechbandit.thermes.dev" : "com.badtechbandit.thermes";
 const LAUNCHER_VERSION = 2;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

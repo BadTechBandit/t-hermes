@@ -2,7 +2,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import {
   checkPortAvailabilityOnHosts,
@@ -12,7 +14,25 @@ import {
   resolveOffset,
 } from "./dev-runner.ts";
 
+const TurboConfig = Schema.Struct({
+  globalPassThroughEnv: Schema.optional(Schema.Array(Schema.String)),
+});
+
+const decodeTurboConfig = Schema.decodeUnknownSync(Schema.fromJsonString(TurboConfig));
+
 it.layer(NodeServices.layer)("dev-runner", (it) => {
+  describe("turbo env", () => {
+    it.effect("passes Hermes gateway runtime opt-in through strict env mode", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const turboConfigRaw = yield* fileSystem.readFileString("../turbo.json");
+        const turboConfig = decodeTurboConfig(turboConfigRaw);
+
+        assert.ok(turboConfig.globalPassThroughEnv?.includes("T3_HERMES_RUNTIME"));
+      }),
+    );
+  });
+
   describe("resolveOffset", () => {
     it.effect("uses explicit T3CODE_PORT_OFFSET when provided", () =>
       Effect.sync(() => {

@@ -587,4 +587,3 @@ At the end, produce:
 - notes on upstream PR suitability
 - notes on fork/repackage suitability
 - notes on remote Hermes readiness
-

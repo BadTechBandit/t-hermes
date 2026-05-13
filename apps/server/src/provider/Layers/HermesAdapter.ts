@@ -48,7 +48,11 @@ import {
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
-import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
+import {
+  parsePermissionRequest,
+  parseSessionModelState,
+  type AcpSessionModelState,
+} from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import { makeHermesAcpRuntime } from "../acp/HermesAcpSupport.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
@@ -57,6 +61,7 @@ import { makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = ProviderDriverKind.make("hermes");
 const HERMES_RESUME_VERSION = 1 as const;
+const HERMES_FALLBACK_MODEL_SLUG = "hermes-agent";
 
 export interface HermesAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
@@ -78,6 +83,7 @@ interface HermesSessionContext {
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntimeShape;
+  readonly modelState: AcpSessionModelState | undefined;
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
@@ -95,6 +101,111 @@ function parseHermesResume(raw: unknown): { sessionId: string } | undefined {
   if (raw.schemaVersion !== HERMES_RESUME_VERSION) return undefined;
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
   return { sessionId: raw.sessionId.trim() };
+}
+
+function requestedHermesModel(
+  modelSelection: { readonly instanceId: ProviderInstanceId; readonly model: string } | undefined,
+  boundInstanceId: ProviderInstanceId,
+): string | undefined {
+  if (modelSelection?.instanceId !== boundInstanceId) {
+    return undefined;
+  }
+  const model = modelSelection.model.trim();
+  if (!model || model === HERMES_FALLBACK_MODEL_SLUG) {
+    return undefined;
+  }
+  return model;
+}
+
+function markdownBullet(label: string, value: string): string {
+  return `- ${label}: ${value}`;
+}
+
+export function formatHermesAcpText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return text;
+  }
+
+  if (trimmed.startsWith("Available commands:")) {
+    const commands = trimmed
+      .split(/\r?\n/u)
+      .map((line) => line.match(/^\s*(\/\S+)\s+(.+)$/u))
+      .filter((match): match is RegExpMatchArray => match !== null)
+      .map((match) => `- \`${match[1]}\` - ${match[2]?.trim() ?? ""}`);
+    return [
+      "**Available commands**",
+      "",
+      ...commands,
+      "",
+      "Unrecognized slash commands are sent to Hermes as normal messages.",
+    ].join("\n");
+  }
+
+  if (trimmed.startsWith("Available tools")) {
+    const [heading = "Available tools", ...toolLines] = trimmed.split(/\r?\n/u);
+    const tools = toolLines
+      .map((line) => line.match(/^\s*([^:]+):\s*(.+)$/u))
+      .filter((match): match is RegExpMatchArray => match !== null)
+      .map((match) => `- \`${match[1]?.trim() ?? ""}\` - ${match[2]?.trim() ?? ""}`);
+    return [`**${heading.trim()}**`, "", ...tools].join("\n");
+  }
+
+  if (trimmed.startsWith("Current model:")) {
+    const model = trimmed.match(/^Current model:\s*(.+)$/mu)?.[1]?.trim();
+    const provider = trimmed.match(/^Provider:\s*(.+)$/mu)?.[1]?.trim();
+    return [
+      "**Current model**",
+      "",
+      ...(model ? [markdownBullet("Model", `\`${model}\``)] : []),
+      ...(provider ? [markdownBullet("Provider", `\`${provider}\``)] : []),
+    ].join("\n");
+  }
+
+  if (trimmed.startsWith("Model switched to:")) {
+    const model = trimmed.match(/^Model switched to:\s*(.+)$/mu)?.[1]?.trim();
+    const provider = trimmed.match(/^Provider:\s*(.+)$/mu)?.[1]?.trim();
+    return [
+      "**Model switched**",
+      "",
+      ...(model ? [markdownBullet("Model", `\`${model}\``)] : []),
+      ...(provider ? [markdownBullet("Provider", `\`${provider}\``)] : []),
+    ].join("\n");
+  }
+
+  if (trimmed.startsWith("Conversation:") || trimmed.startsWith("Conversation is empty")) {
+    return [
+      "**Context**",
+      "",
+      ...trimmed
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => `- ${line}`),
+    ].join("\n");
+  }
+
+  if (trimmed.startsWith("Context compressed:")) {
+    const [messages, tokens] = trimmed.split(/\r?\n/u).map((line) => line.trim());
+    return [
+      "**Context compressed**",
+      "",
+      ...(messages
+        ? [markdownBullet("Messages", messages.replace(/^Context compressed:\s*/u, ""))]
+        : []),
+      ...(tokens ? [markdownBullet("Tokens", tokens)] : []),
+    ].join("\n");
+  }
+
+  if (trimmed === "Conversation history cleared.") {
+    return "**Reset**\n\nConversation history cleared.";
+  }
+
+  if (trimmed.startsWith("Hermes Agent v")) {
+    return `**Hermes**\n\nVersion: \`${trimmed.replace(/^Hermes Agent\s*/u, "")}\``;
+  }
+
+  return text;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -170,7 +281,7 @@ function questionsFromElicitation(
     ];
   }
 
-  return entries.map(([id, property], index) => {
+  return entries.map(([id, property]) => {
     const header = property.title ?? id;
     const question = property.description ?? request.message;
     if (property.type === "string") {
@@ -483,13 +594,26 @@ export function makeHermesAdapter(
           );
 
           const now = yield* nowIso;
+          const modelState = parseSessionModelState(started.sessionSetupResult);
+          const selectedModel = requestedHermesModel(input.modelSelection, boundInstanceId);
+          if (selectedModel) {
+            yield* acp
+              .setSessionModel(selectedModel)
+              .pipe(
+                Effect.mapError((error) =>
+                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", error),
+                ),
+              );
+          }
+          const currentModel =
+            selectedModel ?? modelState?.currentModelId ?? HERMES_FALLBACK_MODEL_SLUG;
           const session: ProviderSession = {
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            model: "hermes-agent",
+            model: currentModel,
             threadId: input.threadId,
             resumeCursor: {
               schemaVersion: HERMES_RESUME_VERSION,
@@ -504,6 +628,7 @@ export function makeHermesAdapter(
             session,
             scope: sessionScope,
             acp,
+            modelState,
             notificationFiber: undefined,
             pendingApprovals,
             pendingUserInputs,
@@ -576,10 +701,30 @@ export function makeHermesAdapter(
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
                         ...(event.itemId ? { itemId: event.itemId } : {}),
-                        text: event.text,
+                        text: formatHermesAcpText(event.text),
                         rawPayload: event.rawPayload,
                       }),
                     );
+                    return;
+                  case "UsageUpdated":
+                    yield* offerRuntimeEvent({
+                      type: "thread.token-usage.updated",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      payload: {
+                        usage: {
+                          usedTokens: event.usedTokens,
+                          ...(event.maxTokens !== undefined ? { maxTokens: event.maxTokens } : {}),
+                          compactsAutomatically: true,
+                        },
+                      },
+                      raw: {
+                        source: "acp.jsonrpc",
+                        method: "session/update",
+                        payload: event.rawPayload,
+                      },
+                    });
                     return;
                 }
               }),
@@ -622,6 +767,17 @@ export function makeHermesAdapter(
         const turnId = TurnId.make(crypto.randomUUID());
         ctx.activeTurnId = turnId;
         ctx.session = { ...ctx.session, activeTurnId: turnId, updatedAt: yield* nowIso };
+        const selectedModel = requestedHermesModel(input.modelSelection, boundInstanceId);
+        if (selectedModel && selectedModel !== ctx.session.model) {
+          yield* ctx.acp
+            .setSessionModel(selectedModel)
+            .pipe(
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", error),
+              ),
+            );
+          ctx.session = { ...ctx.session, model: selectedModel, updatedAt: yield* nowIso };
+        }
 
         yield* offerRuntimeEvent({
           type: "turn.started",
@@ -629,7 +785,7 @@ export function makeHermesAdapter(
           provider: PROVIDER,
           threadId: input.threadId,
           turnId,
-          payload: { model: ctx.session.model ?? "hermes-agent" },
+          payload: { model: ctx.session.model ?? HERMES_FALLBACK_MODEL_SLUG },
         });
 
         const promptParts: Array<import("effect-acp/schema").ContentBlock> = [];

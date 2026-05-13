@@ -18,9 +18,13 @@ const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
+const emitUsageUpdate = process.env.T3_ACP_EMIT_USAGE_UPDATE === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
+const sessionModelStateCurrentId = process.env.T3_ACP_MODEL_STATE_CURRENT_ID;
+const sessionModelStateName = process.env.T3_ACP_MODEL_STATE_NAME;
+const sessionModelStateDescription = process.env.T3_ACP_MODEL_STATE_DESCRIPTION;
 const sessionId = "mock-session-1";
 
 let currentModeId = "ask";
@@ -208,6 +212,38 @@ function modeState(): AcpSchema.SessionModeState {
   };
 }
 
+function modelState(): AcpSchema.SessionModelState | undefined {
+  const modelId = sessionModelStateCurrentId?.trim();
+  if (!modelId) {
+    return undefined;
+  }
+  return {
+    currentModelId: modelId,
+    availableModels: [
+      {
+        modelId,
+        name: sessionModelStateName?.trim() || modelId,
+        ...(sessionModelStateDescription?.trim()
+          ? { description: sessionModelStateDescription.trim() }
+          : {}),
+      },
+    ],
+  };
+}
+
+function usageUpdate(): Extract<
+  AcpSchema.SessionNotification["update"],
+  { readonly sessionUpdate: "usage_update" }
+> {
+  const size = Number.parseInt(process.env.T3_ACP_USAGE_SIZE ?? "272000", 10);
+  const used = Number.parseInt(process.env.T3_ACP_USAGE_USED ?? "11231", 10);
+  return {
+    sessionUpdate: "usage_update",
+    size: Number.isFinite(size) ? size : 272000,
+    used: Number.isFinite(used) ? used : 11231,
+  };
+}
+
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
 
@@ -225,10 +261,14 @@ const program = Effect.gen(function* () {
   yield* agent.handleAuthenticate(() => Effect.succeed({}));
 
   yield* agent.handleCreateSession(() =>
-    Effect.succeed({
-      sessionId,
-      modes: modeState(),
-      configOptions: configOptions(),
+    Effect.sync(() => {
+      const models = modelState();
+      return {
+        sessionId,
+        modes: modeState(),
+        configOptions: configOptions(),
+        ...(models ? { models } : {}),
+      };
     }),
   );
 
@@ -242,11 +282,24 @@ const program = Effect.gen(function* () {
         },
       })
       .pipe(
-        Effect.as({
-          modes: modeState(),
-          configOptions: configOptions(),
-        }),
+        Effect.as(
+          (() => {
+            const models = modelState();
+            return {
+              modes: modeState(),
+              configOptions: configOptions(),
+              ...(models ? { models } : {}),
+            };
+          })(),
+        ),
       ),
+  );
+
+  yield* agent.handleSetSessionModel((request) =>
+    Effect.sync(() => {
+      currentModelId = String(request.modelId ?? "").trim() || currentModelId;
+      return {};
+    }),
   );
 
   yield* agent.handleSetSessionConfigOption((request) =>
@@ -295,6 +348,13 @@ const program = Effect.gen(function* () {
   yield* agent.handlePrompt((request) =>
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
+
+      if (emitUsageUpdate) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: usageUpdate(),
+        });
+      }
 
       if (emitInterleavedAssistantToolCalls) {
         const toolCallId = "tool-call-1";

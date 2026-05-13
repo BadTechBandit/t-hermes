@@ -48,6 +48,15 @@ describe("searchProviderSkills", () => {
     expect(searchProviderSkills(skills, "gfc").map((skill) => skill.name)).toEqual(["gh-fix-ci"]);
   });
 
+  it("accepts slash-prefixed skill queries for Hermes commands", () => {
+    const skills = [
+      makeSkill({ name: "spike", displayName: "Spike" }),
+      makeSkill({ name: "test-driven-development", displayName: "Test Driven Development" }),
+    ];
+
+    expect(searchProviderSkills(skills, "/spi").map((skill) => skill.name)).toEqual(["spike"]);
+  });
+
   it("omits disabled skills from results", () => {
     const skills = [
       makeSkill({ name: "ui", displayName: "Ui", enabled: false }),

@@ -17,6 +17,17 @@ export interface AcpSessionModeState {
   readonly availableModes: ReadonlyArray<AcpSessionMode>;
 }
 
+export interface AcpSessionModel {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+}
+
+export interface AcpSessionModelState {
+  readonly currentModelId: string;
+  readonly availableModels: ReadonlyArray<AcpSessionModel>;
+}
+
 export interface AcpToolCallState {
   readonly toolCallId: string;
   readonly kind?: string;
@@ -68,6 +79,12 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
       readonly text: string;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly usedTokens: number;
+      readonly maxTokens?: number;
       readonly rawPayload: unknown;
     };
 
@@ -145,6 +162,36 @@ export function parseSessionModeState(
   return {
     currentModeId,
     availableModes,
+  };
+}
+
+export function parseSessionModelState(
+  sessionResponse: AcpSessionSetupResponse,
+): AcpSessionModelState | undefined {
+  const models = sessionResponse.models;
+  if (!models) return undefined;
+  const availableModels = models.availableModels
+    .map((model) => {
+      const id = model.modelId.trim();
+      const name = model.name.trim();
+      if (!id || !name) {
+        return undefined;
+      }
+      const description = model.description?.trim() || undefined;
+      return description !== undefined
+        ? ({ id, name, description } satisfies AcpSessionModel)
+        : ({ id, name } satisfies AcpSessionModel);
+    })
+    .filter((model): model is AcpSessionModel => model !== undefined);
+
+  const currentModelId = models.currentModelId.trim() || availableModels[0]?.id;
+  if (!currentModelId || availableModels.length === 0) {
+    return undefined;
+  }
+
+  return {
+    currentModelId,
+    availableModels,
   };
 }
 
@@ -472,6 +519,15 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           rawPayload: params,
         });
       }
+      break;
+    }
+    case "usage_update": {
+      events.push({
+        _tag: "UsageUpdated",
+        usedTokens: Math.max(0, upd.used),
+        ...(upd.size > 0 ? { maxTokens: upd.size } : {}),
+        rawPayload: params,
+      });
       break;
     }
     default:

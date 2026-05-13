@@ -11,10 +11,12 @@ import { ServerConfig } from "../../config.ts";
 import { makeHermesTextGeneration } from "../../textGeneration/HermesTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeHermesAdapter } from "../Layers/HermesAdapter.ts";
+import { makeHermesGatewayAdapter } from "../Layers/HermesGatewayAdapter.ts";
 import {
   buildInitialHermesProviderSnapshot,
   checkHermesProviderStatus,
 } from "../Layers/HermesProvider.ts";
+import { isHermesGatewayRuntimeEnabled } from "../hermesGateway/HermesGatewayMode.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
@@ -81,12 +83,18 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies HermesSettings;
+      const useGatewayRuntime = isHermesGatewayRuntimeEnabled(processEnv);
 
-      const adapter = yield* makeHermesAdapter(effectiveConfig, {
-        environment: processEnv,
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-        instanceId,
-      });
+      const adapter = useGatewayRuntime
+        ? yield* makeHermesGatewayAdapter(effectiveConfig, {
+            environment: processEnv,
+            instanceId,
+          })
+        : yield* makeHermesAdapter(effectiveConfig, {
+            environment: processEnv,
+            ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+            instanceId,
+          });
       const textGeneration = makeHermesTextGeneration();
 
       const checkProvider = checkHermesProviderStatus(effectiveConfig, processEnv).pipe(
@@ -100,7 +108,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         streamSettings: Stream.never,
         haveSettingsChanged: () => false,
         initialSnapshot: (settings) =>
-          buildInitialHermesProviderSnapshot(settings).pipe(Effect.map(stampIdentity)),
+          buildInitialHermesProviderSnapshot(settings, processEnv).pipe(Effect.map(stampIdentity)),
         checkProvider,
         refreshInterval: SNAPSHOT_REFRESH_INTERVAL,
       }).pipe(
