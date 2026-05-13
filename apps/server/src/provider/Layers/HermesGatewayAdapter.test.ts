@@ -20,7 +20,13 @@ import {
 } from "@t3tools/contracts";
 
 import { ServerConfig } from "../../config.ts";
-import { makeHermesGatewayAdapter } from "./HermesGatewayAdapter.ts";
+import {
+  formatHermesGatewayCommandCatalog,
+  formatHermesGatewaySessionList,
+  formatHermesGatewayText,
+  formatHermesGatewayToolsShow,
+  makeHermesGatewayAdapter,
+} from "./HermesGatewayAdapter.ts";
 
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
@@ -78,6 +84,75 @@ input.on("line", (line) => {
       jsonrpc: "2.0",
       id: req.id,
       error: { code: 4018, message: "not a quick/plugin/skill command: " + req.params.name },
+    });
+    return;
+  }
+  if (req.method === "commands.catalog") {
+    write({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        skill_count: 1,
+        categories: [
+          { name: "Core", pairs: [["/help", "List available commands"], ["/sessions", "List recent sessions"]] },
+          { name: "Model", pairs: [["/model", "Show current model and provider"]] },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "tools.show") {
+    write({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        total: 2,
+        sections: [
+          { name: "browser", tools: [{ name: "browser_open", description: "Open a URL in the browser." }] },
+          { name: "shell", tools: [{ name: "terminal", description: "Execute shell commands." }] },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "session.list") {
+    write({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        sessions: [
+          {
+            id: "session-1",
+            title: "Availability check",
+            preview: "Checked Hermes gateway status",
+            started_at: 1778670000,
+            message_count: 4,
+            source: "tui",
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "model.options") {
+    write({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        provider: "custom",
+        model: model,
+        providers: [
+          { slug: "custom", name: "Custom", authenticated: true, is_current: true, models: [model] },
+        ],
+      },
+    });
+    return;
+  }
+  if (req.method === "config.get") {
+    write({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { value: "high", display: "show" },
     });
     return;
   }
@@ -214,6 +289,78 @@ input.on("line", (line) => {
 }
 
 describe("HermesGatewayAdapter", () => {
+  it("formats rich terminal command output as readable markdown", () => {
+    assert.equal(
+      formatHermesGatewayText({
+        commandName: "help",
+        text: "\u001b[1mAvailable commands\u001b[0m\r\n┌────┬────────────┐\n│ /help │ Show help │\n└────┴────────────┘",
+      }),
+      [
+        "**/help**",
+        "",
+        "```text",
+        "Available commands",
+        "┌────┬────────────┐",
+        "│ /help │ Show help │",
+        "└────┴────────────┘",
+        "```",
+      ].join("\n"),
+    );
+  });
+
+  it("formats structured gateway help, tools, and sessions", () => {
+    assert.equal(
+      formatHermesGatewayCommandCatalog({
+        skill_count: 2,
+        categories: [{ name: "Core", pairs: [["/help", "List available commands"]] }],
+      }),
+      [
+        "**Hermes commands**",
+        "",
+        "**Core**",
+        "- `/help` - List available commands",
+        "",
+        "2 skill commands available.",
+      ].join("\n"),
+    );
+
+    assert.equal(
+      formatHermesGatewayToolsShow({
+        total: 1,
+        sections: [
+          { name: "browser", tools: [{ name: "browser_open", description: "Open URL." }] },
+        ],
+      }),
+      [
+        "**Hermes tools**",
+        "",
+        "1 tool available.",
+        "",
+        "**browser**",
+        "- `browser_open` - Open URL.",
+      ].join("\n"),
+    );
+
+    assert.include(
+      formatHermesGatewaySessionList(
+        {
+          sessions: [
+            {
+              id: "session-1",
+              title: "Availability check",
+              preview: "Checked Hermes status",
+              started_at: 1778670000,
+              message_count: 4,
+              source: "tui",
+            },
+          ],
+        },
+        10,
+      ),
+      "- ID: `session-1`",
+    );
+  });
+
   it.effect("streams prompts, gateway skills, slash command output, and usage", () =>
     provideHermesGatewayAdapterTestServices(
       Effect.scoped(
@@ -278,6 +425,56 @@ describe("HermesGatewayAdapter", () => {
           assert.isTrue(Option.isSome(yield* Fiber.join(usageFiber)));
           assert.isTrue(Option.isSome(yield* Fiber.join(itemFiber)));
           assert.isTrue(Option.isSome(yield* Fiber.join(toolFiber)));
+          yield* adapter.stopSession(threadId);
+        }),
+      ),
+    ),
+  );
+
+  it.effect("emits clean markdown for structured gateway slash commands", () =>
+    provideHermesGatewayAdapterTestServices(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { dir, scriptPath } = yield* Effect.promise(() => makeFakeGatewayScript());
+          const adapter = yield* makeHermesGatewayAdapter(decodeHermesSettings({}), {
+            gatewayRuntimeOptions: {
+              spawn: { command: "bun", args: [scriptPath], cwd: dir },
+              startupTimeoutMs: 1_000,
+              requestTimeoutMs: 1_000,
+              shutdownTimeoutMs: 500,
+            },
+          });
+          const threadId = ThreadId.make("hermes-gateway-structured-output");
+          const textFiber = yield* adapter.streamEvents.pipe(
+            Stream.filter((event) => event.type === "content.delta"),
+            Stream.take(5),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+
+          yield* adapter.startSession({
+            threadId,
+            provider: ProviderDriverKind.make("hermes"),
+            cwd: dir,
+            runtimeMode: "full-access",
+          });
+
+          yield* adapter.sendTurn({ threadId, input: "/help", attachments: [] });
+          yield* adapter.sendTurn({ threadId, input: "/tools", attachments: [] });
+          yield* adapter.sendTurn({ threadId, input: "/sessions", attachments: [] });
+          yield* adapter.sendTurn({ threadId, input: "/model", attachments: [] });
+          yield* adapter.sendTurn({ threadId, input: "/reasoning", attachments: [] });
+
+          const textDeltas = Array.from(yield* Fiber.join(textFiber)).map((event) =>
+            event.type === "content.delta" ? event.payload.delta : "",
+          );
+
+          assert.include(textDeltas[0], "**Hermes commands**");
+          assert.include(textDeltas[1], "**Hermes tools**");
+          assert.include(textDeltas[2], "**Hermes sessions**");
+          assert.include(textDeltas[3], "**Hermes model**");
+          assert.include(textDeltas[4], "**Hermes reasoning**");
+
           yield* adapter.stopSession(threadId);
         }),
       ),

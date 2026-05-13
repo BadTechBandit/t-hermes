@@ -38,7 +38,11 @@ import {
   type HermesGatewayRuntime,
   type HermesGatewayRuntimeOptions,
 } from "../hermesGateway/HermesGatewayRuntime.ts";
-import type { HermesGatewayEvent } from "../hermesGateway/HermesGatewayProtocol.ts";
+import type {
+  HermesGatewayCommandsCatalogResult,
+  HermesGatewayEvent,
+  HermesGatewayModelOptionsResult,
+} from "../hermesGateway/HermesGatewayProtocol.ts";
 import { formatHermesAcpText } from "./HermesAdapter.ts";
 
 const PROVIDER = ProviderDriverKind.make("hermes");
@@ -86,6 +90,34 @@ interface GatewaySlashExecResult {
   readonly output?: string;
   readonly warning?: string;
 }
+
+interface GatewayToolsShowResult {
+  readonly total?: number;
+  readonly sections?: ReadonlyArray<unknown>;
+}
+
+interface GatewaySessionListResult {
+  readonly sessions?: ReadonlyArray<unknown>;
+}
+
+interface GatewayReasoningConfigResult {
+  readonly value?: string;
+  readonly display?: string;
+}
+
+const ANSI_ESCAPE_PATTERN = new RegExp(
+  String.raw`[\u001b\u009b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))`,
+  "gu",
+);
+const OSC_ESCAPE_PATTERN = new RegExp(String.raw`\u001b\][^\u0007]*(?:\u0007|\u001b\\)`, "gu");
+const CONTROL_CHARACTER_PATTERN = new RegExp(
+  String.raw`[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]`,
+  "gu",
+);
+const BOX_DRAWING_PATTERN = /[┌┐└┘├┤┬┴┼─│╭╮╰╯═║╔╗╚╝]/u;
+const MAX_DESCRIPTION_LENGTH = 220;
+const DEFAULT_SESSION_LIST_LIMIT = 30;
+const MAX_SESSION_LIST_LIMIT = 100;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -141,6 +173,308 @@ function stringArrayField(value: unknown, key: string): ReadonlyArray<string> {
   return candidate
     .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
     .filter((entry) => entry.length > 0);
+}
+
+function removeBackspaceOverwrites(input: string): string {
+  const chars: string[] = [];
+  for (const char of input) {
+    if (char === "\b") {
+      chars.pop();
+      continue;
+    }
+    chars.push(char);
+  }
+  return chars.join("");
+}
+
+function cleanHermesGatewayText(text: string): string {
+  return removeBackspaceOverwrites(text)
+    .replace(OSC_ESCAPE_PATTERN, "")
+    .replace(ANSI_ESCAPE_PATTERN, "")
+    .replace(/\r\n/gu, "\n")
+    .replace(/\r/gu, "\n")
+    .replace(CONTROL_CHARACTER_PATTERN, "")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/u, ""))
+    .join("\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
+function compactDescription(value: unknown, maxLength = MAX_DESCRIPTION_LENGTH): string {
+  const cleaned = cleanHermesGatewayText(typeof value === "string" ? value : String(value ?? ""))
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...`;
+}
+
+function markdownCode(value: string): string {
+  return `\`${value.replace(/`/gu, "\\`")}\``;
+}
+
+function markdownBullet(label: string, value: string): string {
+  return `- ${label}: ${value}`;
+}
+
+function commandPairs(
+  value: unknown,
+): ReadonlyArray<{ readonly name: string; readonly description: string }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      return [];
+    }
+    const name = typeof entry[0] === "string" ? entry[0].trim() : "";
+    const description = compactDescription(entry[1]);
+    if (!name.startsWith("/") || !description) {
+      return [];
+    }
+    return [{ name, description }];
+  });
+}
+
+function parseSessionLimit(arg: string): number {
+  const raw = arg.trim().match(/\d+/u)?.[0];
+  const parsed = raw ? Number.parseInt(raw, 10) : DEFAULT_SESSION_LIST_LIMIT;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SESSION_LIST_LIMIT;
+  }
+  return Math.min(parsed, MAX_SESSION_LIST_LIMIT);
+}
+
+function formatEpoch(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  const timestampMs = value > 10_000_000_000 ? value : value * 1000;
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  return date.toISOString().replace("T", " ").slice(0, 16);
+}
+
+function formatLabeledOutput(title: string, text: string): string {
+  const cleaned = cleanHermesGatewayText(text);
+  const lines = cleaned
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line.toLowerCase() !== title.toLowerCase());
+  const formatted = lines.map((line) => {
+    const match = line.match(/^([^:]{2,48}):\s*(.+)$/u);
+    if (!match) {
+      return line;
+    }
+    return markdownBullet(match[1]?.trim() ?? "", match[2]?.trim() ?? "");
+  });
+  return [`**${title}**`, "", ...formatted].join("\n");
+}
+
+export function formatHermesGatewayCommandCatalog(
+  catalog: HermesGatewayCommandsCatalogResult,
+): string {
+  const lines = ["**Hermes commands**"];
+  const seen = new Set<string>();
+  const categories = Array.isArray(catalog.categories) ? catalog.categories : [];
+
+  for (const rawCategory of categories) {
+    const category = asRecord(rawCategory);
+    const categoryName =
+      typeof category.name === "string" && category.name.trim() ? category.name.trim() : "Commands";
+    const pairs = commandPairs(category.pairs).filter((pair) => {
+      const key = pair.name.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    if (pairs.length === 0) {
+      continue;
+    }
+    lines.push(
+      "",
+      `**${categoryName}**`,
+      ...pairs.map((pair) => `- ${markdownCode(pair.name)} - ${pair.description}`),
+    );
+  }
+
+  const uncategorized = commandPairs(catalog.pairs).filter((pair) => {
+    const key = pair.name.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  if (uncategorized.length > 0) {
+    lines.push(
+      "",
+      "**Other**",
+      ...uncategorized.map((pair) => `- ${markdownCode(pair.name)} - ${pair.description}`),
+    );
+  }
+
+  if (typeof catalog.skill_count === "number" && catalog.skill_count > 0) {
+    lines.push(
+      "",
+      `${catalog.skill_count} skill command${catalog.skill_count === 1 ? "" : "s"} available.`,
+    );
+  }
+  if (catalog.warning?.trim()) {
+    lines.push("", `Warning: ${compactDescription(catalog.warning)}`);
+  }
+  if (lines.length === 1) {
+    lines.push("", "No gateway commands were returned.");
+  }
+  return lines.join("\n");
+}
+
+export function formatHermesGatewayToolsShow(result: GatewayToolsShowResult): string {
+  const lines = ["**Hermes tools**"];
+  const sections = Array.isArray(result.sections) ? result.sections : [];
+  let renderedTools = 0;
+
+  if (typeof result.total === "number" && Number.isFinite(result.total)) {
+    lines.push("", `${result.total} tool${result.total === 1 ? "" : "s"} available.`);
+  }
+
+  for (const rawSection of sections) {
+    const section = asRecord(rawSection);
+    const sectionName =
+      typeof section.name === "string" && section.name.trim() ? section.name.trim() : "Tools";
+    const tools = Array.isArray(section.tools) ? section.tools : [];
+    const rows = tools.flatMap((rawTool) => {
+      const tool = asRecord(rawTool);
+      const name = typeof tool.name === "string" ? tool.name.trim() : "";
+      if (!name) {
+        return [];
+      }
+      renderedTools += 1;
+      return [{ name, description: compactDescription(tool.description || "No description.") }];
+    });
+    if (rows.length === 0) {
+      continue;
+    }
+    lines.push(
+      "",
+      `**${sectionName}**`,
+      ...rows.map((row) => `- ${markdownCode(row.name)} - ${row.description}`),
+    );
+  }
+
+  if (renderedTools === 0) {
+    lines.push("", "No tools were returned.");
+  }
+  return lines.join("\n");
+}
+
+export function formatHermesGatewaySessionList(
+  result: GatewaySessionListResult,
+  requestedLimit = DEFAULT_SESSION_LIST_LIMIT,
+): string {
+  const sessions = Array.isArray(result.sessions) ? result.sessions : [];
+  if (sessions.length === 0) {
+    return ["**Hermes sessions**", "", "No sessions found."].join("\n");
+  }
+
+  const renderedSessions = sessions.slice(0, requestedLimit);
+  const lines = [
+    "**Hermes sessions**",
+    "",
+    `Showing ${renderedSessions.length} recent session${renderedSessions.length === 1 ? "" : "s"}.`,
+  ];
+
+  renderedSessions.forEach((rawSession, index) => {
+    const session = asRecord(rawSession);
+    const id = typeof session.id === "string" ? session.id.trim() : "";
+    const title = compactDescription(session.title || session.preview || id || "Untitled", 96);
+    const preview = compactDescription(session.preview || "", 160);
+    const source = typeof session.source === "string" ? session.source.trim() : "";
+    const messageCount =
+      typeof session.message_count === "number" && Number.isFinite(session.message_count)
+        ? session.message_count
+        : undefined;
+    const startedAt = formatEpoch(session.started_at);
+    lines.push(
+      "",
+      `${index + 1}. **${title}**`,
+      ...(id ? [markdownBullet("ID", markdownCode(id))] : []),
+      ...(source ? [markdownBullet("Source", markdownCode(source))] : []),
+      ...(messageCount !== undefined ? [markdownBullet("Messages", String(messageCount))] : []),
+      ...(startedAt ? [markdownBullet("Started", `${startedAt} UTC`)] : []),
+      ...(preview ? [markdownBullet("Preview", preview)] : []),
+    );
+  });
+
+  return lines.join("\n");
+}
+
+export function formatHermesGatewayModelOptions(result: HermesGatewayModelOptionsResult): string {
+  const lines = [
+    "**Hermes model**",
+    "",
+    markdownBullet("Provider", markdownCode(result.provider || "unknown")),
+    markdownBullet("Model", markdownCode(result.model || "unknown")),
+  ];
+  const providers = Array.isArray(result.providers) ? result.providers : [];
+  const authenticated = providers.filter(
+    (provider) => provider.authenticated || provider.is_current,
+  );
+
+  if (authenticated.length > 0) {
+    lines.push(
+      "",
+      "**Available providers**",
+      ...authenticated.map((provider) => {
+        const slug = provider.slug || provider.name || "provider";
+        const name = provider.name && provider.name !== slug ? ` (${provider.name})` : "";
+        const modelCount = Array.isArray(provider.models) ? provider.models.length : undefined;
+        const count =
+          modelCount !== undefined ? ` - ${modelCount} model${modelCount === 1 ? "" : "s"}` : "";
+        const current = provider.is_current ? " - current" : "";
+        return `- ${markdownCode(slug)}${name}${count}${current}`;
+      }),
+    );
+  }
+
+  return lines.join("\n");
+}
+
+export function formatHermesGatewayReasoning(result: GatewayReasoningConfigResult): string {
+  return [
+    "**Hermes reasoning**",
+    "",
+    markdownBullet("Effort", markdownCode(result.value || "default")),
+    markdownBullet("Display", markdownCode(result.display || "unknown")),
+  ].join("\n");
+}
+
+export function formatHermesGatewayText(input: {
+  readonly commandName?: string | undefined;
+  readonly text: string;
+}): string {
+  const cleaned = cleanHermesGatewayText(input.text);
+  if (!cleaned) {
+    return input.text;
+  }
+
+  const acpFormatted = formatHermesAcpText(cleaned);
+  if (acpFormatted !== cleaned) {
+    return acpFormatted;
+  }
+
+  if (BOX_DRAWING_PATTERN.test(cleaned)) {
+    const title = input.commandName ? `/${input.commandName}` : "Hermes output";
+    return [`**${title}**`, "", "```text", cleaned, "```"].join("\n");
+  }
+
+  return cleaned;
 }
 
 function usageNumber(usage: unknown, key: string): number | undefined {
@@ -627,12 +961,15 @@ export function makeHermesGatewayAdapter(
       ctx: GatewaySessionContext,
       turnId: TurnId,
       text: string,
+      options?: { readonly commandName?: string; readonly preformatted?: boolean },
     ): Effect.Effect<void> =>
       offerRuntimeEvent(
         makeContentDeltaEvent({
           threadId: ctx.session.threadId,
           turnId,
-          text: formatHermesAcpText(text),
+          text: options?.preformatted
+            ? text
+            : formatHermesGatewayText({ commandName: options?.commandName, text }),
           streamKind: "assistant_text",
           rawPayload: { text },
         }),
@@ -912,6 +1249,56 @@ export function makeHermesGatewayAdapter(
         catch: (cause) => gatewayRequestError("prompt.submit", cause),
       });
 
+    const structuredGatewaySlashOutput = (
+      ctx: GatewaySessionContext,
+      slash: { readonly name: string; readonly arg: string },
+    ): Effect.Effect<string | void, ProviderAdapterRequestError> => {
+      switch (slash.name) {
+        case "help":
+          return requestGateway<HermesGatewayCommandsCatalogResult>(
+            ctx,
+            "commands.catalog",
+            {},
+          ).pipe(Effect.map(formatHermesGatewayCommandCatalog));
+        case "tools":
+          if (slash.arg.trim()) {
+            return Effect.void;
+          }
+          return requestGateway<GatewayToolsShowResult>(ctx, "tools.show", {
+            session_id: ctx.gatewaySessionId,
+          }).pipe(Effect.map(formatHermesGatewayToolsShow));
+        case "sessions": {
+          const limit = parseSessionLimit(slash.arg);
+          return requestGateway<GatewaySessionListResult>(ctx, "session.list", { limit }).pipe(
+            Effect.map((result) => formatHermesGatewaySessionList(result, limit)),
+          );
+        }
+        case "status":
+          return requestGateway<{ readonly output?: string }>(ctx, "session.status", {
+            session_id: ctx.gatewaySessionId,
+          }).pipe(
+            Effect.map((result) => formatLabeledOutput("Hermes status", result.output ?? "")),
+          );
+        case "model":
+          if (slash.arg.trim()) {
+            return Effect.void;
+          }
+          return requestGateway<HermesGatewayModelOptionsResult>(ctx, "model.options", {
+            session_id: ctx.gatewaySessionId,
+          }).pipe(Effect.map(formatHermesGatewayModelOptions));
+        case "reasoning":
+          if (slash.arg.trim()) {
+            return Effect.void;
+          }
+          return requestGateway<GatewayReasoningConfigResult>(ctx, "config.get", {
+            session_id: ctx.gatewaySessionId,
+            key: "reasoning",
+          }).pipe(Effect.map(formatHermesGatewayReasoning));
+        default:
+          return Effect.void;
+      }
+    };
+
     const runGatewaySlash = (
       ctx: GatewaySessionContext,
       turnId: TurnId,
@@ -921,6 +1308,14 @@ export function makeHermesGatewayAdapter(
         const slash = parseSlash(input);
         if (!slash) {
           return yield* submitGatewayPrompt(ctx, turnId, input);
+        }
+
+        const structuredOutput = yield* structuredGatewaySlashOutput(ctx, slash).pipe(
+          Effect.result,
+        );
+        if (Result.isSuccess(structuredOutput) && structuredOutput.success) {
+          yield* emitTextTurn(ctx, turnId, structuredOutput.success, { preformatted: true });
+          return { type: "exec", output: structuredOutput.success };
         }
 
         const dispatched = yield* requestGateway<GatewayCommandDispatchResult>(
@@ -936,7 +1331,7 @@ export function makeHermesGatewayAdapter(
         if (Result.isSuccess(dispatched)) {
           const result = dispatched.success;
           if (result.notice) {
-            yield* emitTextTurn(ctx, turnId, result.notice);
+            yield* emitTextTurn(ctx, turnId, result.notice, { commandName: slash.name });
           }
           if (result.type === "skill" || result.type === "send") {
             const message = result.message;
@@ -950,7 +1345,7 @@ export function makeHermesGatewayAdapter(
             return yield* submitGatewayPrompt(ctx, turnId, message);
           }
           if (result.output) {
-            yield* emitTextTurn(ctx, turnId, result.output);
+            yield* emitTextTurn(ctx, turnId, result.output, { commandName: slash.name });
             return result;
           }
         }
@@ -960,7 +1355,7 @@ export function makeHermesGatewayAdapter(
           command: input,
         });
         const output = [slashResult.output, slashResult.warning].filter(Boolean).join("\n\n");
-        yield* emitTextTurn(ctx, turnId, output || "(no output)");
+        yield* emitTextTurn(ctx, turnId, output || "(no output)", { commandName: slash.name });
         return slashResult;
       });
 
