@@ -130,6 +130,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
         NodeServices.layer,
         DesktopConfig.layerTest({
           T3CODE_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+          T_HERMES_ENABLE_AUTO_UPDATE: "true",
           T3CODE_DESKTOP_MOCK_UPDATES: "true",
           T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
           ...options.env,
@@ -145,10 +146,11 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     Layer.provideMerge(DesktopState.layer),
     Layer.provideMerge(DesktopAppSettings.layer),
     Layer.provideMerge(
-      DesktopConfig.layerTest({
-        T3CODE_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
-        T3CODE_DESKTOP_MOCK_UPDATES: "true",
-        T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
+        DesktopConfig.layerTest({
+          T3CODE_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+          T_HERMES_ENABLE_AUTO_UPDATE: "true",
+          T3CODE_DESKTOP_MOCK_UPDATES: "true",
+          T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
         ...options.env,
       }),
     ),

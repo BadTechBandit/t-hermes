@@ -1,63 +1,86 @@
-# T3 Code
+# T-Hermes
 
-T3 Code is a minimal web GUI for coding agents (currently Codex, Claude, and OpenCode, more coming soon).
+T-Hermes is an experimental fork of [T3 Code](https://github.com/pingdotgg/t3code) with [Hermes Agent](https://github.com/NousResearch/hermes-agent) added as a local ACP-backed provider.
 
-## Installation
+The reason this exists is pretty simple: Hermes is a serious agent, but its usual surfaces are not great for long coding sessions. The TUI works. Telegram, Discord, WhatsApp, and the other channels are useful when you want to ping an agent from somewhere else. But none of those feel like a real coding workspace.
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, and OpenCode.
-> Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
+T3 Code already had the shape we wanted: threads, projects, approvals, tool output, and a desktop app that feels closer to Codex or Claude Code than a chat bot. T-Hermes keeps that shape and adds Hermes beside the other agents.
 
-### Run without installing
+This is a fork, not an official T3 Code release and not an official Hermes release. Credit where it is due: the foundation is the T3 team's open-source T3 Code app, and the agent is Hermes by the Hermes/Nous Research team.
 
-```bash
-npx t3
-```
+## What Works Right Now
 
-### Desktop app
+- Hermes appears as a provider next to Codex, Claude, Cursor, and OpenCode.
+- The app starts Hermes locally through `hermes acp`.
+- Hermes uses its own local config and auth. The app does not edit `~/.hermes`.
+- Chat/session workflows work through ACP.
+- Basic Hermes health checks run with `hermes --version`.
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+## Requirements
 
-#### Windows (`winget`)
+You need Hermes installed on the same machine running T-Hermes.
+
+Check:
 
 ```bash
-winget install T3Tools.T3Code
+hermes --version
 ```
 
-#### macOS (Homebrew)
+If that works, T-Hermes should be able to find Hermes through the default `hermes` binary path. If not, set the Hermes provider's binary path to the absolute path from:
 
 ```bash
-brew install --cask t3-code
+command -v hermes
 ```
 
-#### Arch Linux (AUR)
+Leave `HERMES_HOME` blank unless you intentionally use a non-default Hermes home. By default, Hermes should use its normal local state, usually under `~/.hermes`.
+
+## Local Development
 
 ```bash
-yay -S t3code-bin
+bun install
+bun run dev:desktop
 ```
 
-## Some notes
+Expected healthy desktop logs include:
 
-We are very very early in this project. Expect bugs.
+```text
+Listening on http://127.0.0.1:13773
+backend ready
+main window created
+```
 
-We are not accepting contributions yet.
+## Packaging
 
-Observability guide: [docs/observability.md](./docs/observability.md)
-
-## If you REALLY want to contribute still.... read this first
-
-Before local development, prepare the environment and install dependencies:
+Apple Silicon:
 
 ```bash
-# Optional: only needed if you use mise for dev tool management.
-mise install
-bun install .
+bun run dist:desktop:dmg:arm64
 ```
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
+Intel Mac:
 
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+```bash
+bun run dist:desktop:dmg:x64
+```
+
+Auto-updates are disabled in this fork until T-Hermes has its own signed and notarized release channel. That avoids accidentally pulling official T3 Code updates into this fork.
+
+## Upstream
+
+This project tracks T3 Code as an upstream source. The intended maintenance model is:
+
+```text
+official T3 Code -> periodic manual merge -> T-Hermes -> T-Hermes releases
+```
+
+Remote layout:
+
+```text
+upstream -> https://github.com/pingdotgg/t3code.git
+origin   -> this T-Hermes repo
+```
+
+## Attribution
+
+- [T3 Code](https://github.com/pingdotgg/t3code)
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent)

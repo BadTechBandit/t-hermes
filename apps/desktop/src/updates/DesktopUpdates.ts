@@ -43,6 +43,8 @@ import {
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
+const T_HERMES_AUTO_UPDATE_DISABLED_REASON =
+  "T-Hermes automatic updates are disabled until this fork has its own signed release channel.";
 
 const AppUpdateYmlConfig = Schema.Record(Schema.String, Schema.String);
 type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
@@ -159,6 +161,7 @@ function shouldBroadcastDownloadProgress(
 }
 
 function getAutoUpdateDisabledReason(args: {
+  tHermesEnableAutoUpdate: boolean;
   isDevelopment: boolean;
   isPackaged: boolean;
   platform: NodeJS.Platform;
@@ -166,6 +169,9 @@ function getAutoUpdateDisabledReason(args: {
   disabledByEnv: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
+  if (!args.tHermesEnableAutoUpdate) {
+    return T_HERMES_AUTO_UPDATE_DISABLED_REASON;
+  }
   if (!args.hasUpdateFeedConfig) {
     return "Automatic updates are not available because no update feed is configured.";
   }
@@ -244,6 +250,7 @@ const make = Effect.gen(function* () {
     const hasFeedConfig = yield* hasUpdateFeedConfig;
     return Option.fromNullishOr(
       getAutoUpdateDisabledReason({
+        tHermesEnableAutoUpdate: config.tHermesEnableAutoUpdate,
         isDevelopment: environment.isDevelopment,
         isPackaged: environment.isPackaged,
         platform: environment.platform,

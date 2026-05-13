@@ -508,6 +508,8 @@ function resolveGitHubPublishConfig(updateChannel: "latest" | "nightly"):
       readonly channel?: "nightly";
     }
   | undefined {
+  if (process.env.T_HERMES_ENABLE_AUTO_UPDATE !== "true") return undefined;
+
   const rawRepo =
     process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
     process.env.GITHUB_REPOSITORY?.trim() ||
@@ -552,8 +554,8 @@ export function resolveMockUpdateServerUrl(mockUpdateServerPort: number | undefi
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? "T-Hermes (Nightly)"
+    : (desktopPackageJson.productName ?? "T-Hermes");
 }
 
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -565,9 +567,9 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   mockUpdateServerPort: number | undefined,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.t3code",
+    appId: "com.badtechbandit.thermes",
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: "T-Hermes-${version}-${arch}.${ext}",
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -596,12 +598,12 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: "t-hermes",
       icon: "icon.png",
       category: "Development",
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          StartupWMClass: "t-hermes",
         },
       },
     };
@@ -776,13 +778,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
 
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: "t-hermes",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
-    description: "T3 Code desktop build",
-    author: "T3 Tools",
+    description: "T-Hermes desktop build",
+    author: "BadTechBandit",
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
       options.platform,
@@ -940,7 +942,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for T3 Code."),
+  Command.withDescription("Build a desktop artifact for T-Hermes."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 
