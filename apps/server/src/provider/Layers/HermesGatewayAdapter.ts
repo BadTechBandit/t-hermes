@@ -118,6 +118,21 @@ const BOX_DRAWING_PATTERN = /[┌┐└┘├┤┬┴┼─│╭╮╰╯═�
 const MAX_DESCRIPTION_LENGTH = 220;
 const DEFAULT_SESSION_LIST_LIMIT = 30;
 const MAX_SESSION_LIST_LIMIT = 100;
+const KANBAN_SUBCOMMAND_MARKERS = [
+  { marker: "list (alias ls)", command: "list", alias: "ls" },
+  { marker: "show <id>", command: "show <id>" },
+  { marker: "stats", command: "stats" },
+  { marker: "create <title>...", command: "create <title>..." },
+  { marker: "comment <id> <msg>", command: "comment <id> <msg>" },
+  { marker: "complete <id>...", command: "complete <id>..." },
+  { marker: "block <id> [reason]", command: "block <id> [reason]" },
+  { marker: "assign <id> <profile>", command: "assign <id> <profile>" },
+  { marker: "boards list", command: "boards list" },
+  { marker: "assignees", command: "assignees" },
+  { marker: "context <id>", command: "context <id>" },
+  { marker: "runs <id>", command: "runs <id>" },
+  { marker: "log <id>", command: "log <id>" },
+] as const;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -273,6 +288,86 @@ function formatLabeledOutput(title: string, text: string): string {
     return markdownBullet(match[1]?.trim() ?? "", match[2]?.trim() ?? "");
   });
   return [`**${title}**`, "", ...formatted].join("\n");
+}
+
+function normalizeInlineCommandHelp(text: string): string {
+  return text
+    .replace(/\u2014/gu, "-")
+    .replace(/\u2026/gu, "...")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function kanbanNoteLines(text: string): ReadonlyArray<string> {
+  const notes = text.match(/[^.]+(?:\.|$)/gu) ?? [];
+  return notes
+    .map((note) =>
+      note.trim().replace("/kanban <subcommand> -h", markdownCode("/kanban <subcommand> -h")),
+    )
+    .filter((note) => note.length > 0);
+}
+
+function formatHermesGatewayKanbanHelp(text: string): string | undefined {
+  const normalized = normalizeInlineCommandHelp(text);
+  if (!normalized.startsWith("/kanban") || !normalized.includes("Common subcommands:")) {
+    return undefined;
+  }
+
+  const summary =
+    normalized
+      .match(/^\/kanban\s+-\s*(.*?)(?:\s+Common subcommands:|$)/u)?.[1]
+      ?.trim()
+      .replace(/\.$/u, "") ?? "Manage the shared task board";
+  const commandStart = normalized.indexOf("Common subcommands:");
+  const notesStart = normalized.indexOf("Run /kanban", commandStart);
+  const commandBody = normalized
+    .slice(
+      commandStart + "Common subcommands:".length,
+      notesStart >= 0 ? notesStart : normalized.length,
+    )
+    .trim();
+
+  const rows = KANBAN_SUBCOMMAND_MARKERS.flatMap((entry, index) => {
+    const markerIndex = commandBody.indexOf(entry.marker);
+    if (markerIndex < 0) {
+      return [];
+    }
+    const descriptionStart = markerIndex + entry.marker.length;
+    const nextMarkerIndex = KANBAN_SUBCOMMAND_MARKERS.slice(index + 1).reduce<number | undefined>(
+      (nearest, next) => {
+        const position = commandBody.indexOf(next.marker, descriptionStart);
+        if (position < 0) {
+          return nearest;
+        }
+        return nearest === undefined || position < nearest ? position : nearest;
+      },
+      undefined,
+    );
+    const description = commandBody
+      .slice(descriptionStart, nextMarkerIndex ?? commandBody.length)
+      .trim();
+    if (!description) {
+      return [];
+    }
+    const command = markdownCode(entry.command);
+    const alias = "alias" in entry ? ` (${markdownCode(entry.alias)})` : "";
+    return [`- ${command}${alias} - ${description}`];
+  });
+
+  if (rows.length === 0) {
+    return undefined;
+  }
+
+  const notes = notesStart >= 0 ? kanbanNoteLines(normalized.slice(notesStart)) : [];
+  return [
+    "**/kanban**",
+    "",
+    `${summary}.`,
+    "",
+    "**Common subcommands**",
+    ...rows,
+    ...(notes.length > 0 ? ["", ...notes] : []),
+  ].join("\n");
 }
 
 export function formatHermesGatewayCommandCatalog(
@@ -467,6 +562,13 @@ export function formatHermesGatewayText(input: {
   const acpFormatted = formatHermesAcpText(cleaned);
   if (acpFormatted !== cleaned) {
     return acpFormatted;
+  }
+
+  if (input.commandName === "kanban") {
+    const kanbanFormatted = formatHermesGatewayKanbanHelp(cleaned);
+    if (kanbanFormatted) {
+      return kanbanFormatted;
+    }
   }
 
   if (BOX_DRAWING_PATTERN.test(cleaned)) {

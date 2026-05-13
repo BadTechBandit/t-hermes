@@ -157,6 +157,16 @@ input.on("line", (line) => {
     return;
   }
   if (req.method === "slash.exec") {
+    if (req.params.command === "/kanban") {
+      write({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: {
+          output: "/kanban \\u2014 manage the shared task board. Common subcommands: list (alias ls) List tasks on the current board show <id> Task details + comments + events stats Per-status / per-assignee counts create <title>\\u2026 Create a task comment <id> <msg> Append a comment complete <id>\\u2026 Mark task(s) done block <id> [reason] Mark blocked; unblock <id> to revive assign <id> <profile> Reassign boards list Show all boards assignees Known profiles + counts context <id> Full worker-context dump runs <id> Attempt history log <id> Worker log Run /kanban <subcommand> -h for arguments. Read-only commands are safe while an agent is running.",
+        },
+      });
+      return;
+    }
     write({
       jsonrpc: "2.0",
       id: req.id,
@@ -361,6 +371,38 @@ describe("HermesGatewayAdapter", () => {
     );
   });
 
+  it("formats inline kanban command help as readable markdown", () => {
+    assert.equal(
+      formatHermesGatewayText({
+        commandName: "kanban",
+        text: "/kanban \u2014 manage the shared task board.\n\nCommon subcommands: list (alias ls) List tasks on the current board show <id> Task details + comments + events stats Per-status / per-assignee counts create <title>\u2026 Create a task comment <id> <msg> Append a comment complete <id>\u2026 Mark task(s) done block <id> [reason] Mark blocked; unblock <id> to revive assign <id> <profile> Reassign boards list Show all boards assignees Known profiles + counts context <id> Full worker-context dump runs <id> Attempt history log <id> Worker log\n\nRun /kanban <subcommand> -h for arguments. Read-only commands are safe while an agent is running.",
+      }),
+      [
+        "**/kanban**",
+        "",
+        "manage the shared task board.",
+        "",
+        "**Common subcommands**",
+        "- `list` (`ls`) - List tasks on the current board",
+        "- `show <id>` - Task details + comments + events",
+        "- `stats` - Per-status / per-assignee counts",
+        "- `create <title>...` - Create a task",
+        "- `comment <id> <msg>` - Append a comment",
+        "- `complete <id>...` - Mark task(s) done",
+        "- `block <id> [reason]` - Mark blocked; unblock <id> to revive",
+        "- `assign <id> <profile>` - Reassign",
+        "- `boards list` - Show all boards",
+        "- `assignees` - Known profiles + counts",
+        "- `context <id>` - Full worker-context dump",
+        "- `runs <id>` - Attempt history",
+        "- `log <id>` - Worker log",
+        "",
+        "Run `/kanban <subcommand> -h` for arguments.",
+        "Read-only commands are safe while an agent is running.",
+      ].join("\n"),
+    );
+  });
+
   it.effect("streams prompts, gateway skills, slash command output, and usage", () =>
     provideHermesGatewayAdapterTestServices(
       Effect.scoped(
@@ -447,7 +489,7 @@ describe("HermesGatewayAdapter", () => {
           const threadId = ThreadId.make("hermes-gateway-structured-output");
           const textFiber = yield* adapter.streamEvents.pipe(
             Stream.filter((event) => event.type === "content.delta"),
-            Stream.take(5),
+            Stream.take(6),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -464,6 +506,7 @@ describe("HermesGatewayAdapter", () => {
           yield* adapter.sendTurn({ threadId, input: "/sessions", attachments: [] });
           yield* adapter.sendTurn({ threadId, input: "/model", attachments: [] });
           yield* adapter.sendTurn({ threadId, input: "/reasoning", attachments: [] });
+          yield* adapter.sendTurn({ threadId, input: "/kanban", attachments: [] });
 
           const textDeltas = Array.from(yield* Fiber.join(textFiber)).map((event) =>
             event.type === "content.delta" ? event.payload.delta : "",
@@ -474,6 +517,8 @@ describe("HermesGatewayAdapter", () => {
           assert.include(textDeltas[2], "**Hermes sessions**");
           assert.include(textDeltas[3], "**Hermes model**");
           assert.include(textDeltas[4], "**Hermes reasoning**");
+          assert.include(textDeltas[5], "**/kanban**");
+          assert.include(textDeltas[5], "- `list` (`ls`) - List tasks on the current board");
 
           yield* adapter.stopSession(threadId);
         }),
