@@ -159,9 +159,9 @@ export function SshPasswordPromptDialog() {
         <DialogHeader>
           <DialogTitle>SSH Password Required</DialogTitle>
           <DialogDescription>
-            T3 needs your SSH password to connect to{" "}
+            T-Hermes needs your SSH password to connect to{" "}
             {target ? <code>{target}</code> : "the remote host"}. The password is passed to the
-            local SSH process for this connection attempt and is not saved by T3 Code.
+            local SSH process for this connection attempt and is not saved by T-Hermes.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3" scrollFade={false}>

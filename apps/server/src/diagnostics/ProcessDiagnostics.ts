@@ -385,7 +385,9 @@ function assertDescendantPid(
   pid: number,
 ): Effect.Effect<void, ProcessDiagnosticsError, ChildProcessSpawner.ChildProcessSpawner> {
   if (pid === process.pid) {
-    return Effect.fail(toProcessDiagnosticsError("Refusing to signal the T3 server process."));
+    return Effect.fail(
+      toProcessDiagnosticsError("Refusing to signal the T-Hermes server process."),
+    );
   }
 
   return readProcessRows().pipe(
@@ -397,7 +399,9 @@ function assertDescendantPid(
       return descendant
         ? Effect.void
         : Effect.fail(
-            toProcessDiagnosticsError(`Process ${pid} is not a live descendant of the T3 server.`),
+            toProcessDiagnosticsError(
+              `Process ${pid} is not a live descendant of the T-Hermes server.`,
+            ),
           );
     }),
   );

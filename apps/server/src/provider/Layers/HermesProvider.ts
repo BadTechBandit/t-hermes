@@ -366,7 +366,7 @@ export function buildInitialHermesProviderSnapshot(
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Hermes is disabled in T3 Code settings.",
+          message: "Hermes is disabled in T-Hermes settings.",
         },
       });
     }
@@ -450,7 +450,7 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Hermes is disabled in T3 Code settings.",
+        message: "Hermes is disabled in T-Hermes settings.",
       },
     });
   }

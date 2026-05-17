@@ -97,8 +97,8 @@ export const buildDiscordReleaseAnnouncement = (
       url: options.releaseUrl.href,
       description:
         options.target === "prerelease"
-          ? "A new T3 Code prerelease is available for nightly testers."
-          : "A new T3 Code latest release is available.",
+          ? "A new T-Hermes prerelease is available for nightly testers."
+          : "A new T-Hermes latest release is available.",
       color: targetColors[options.target],
       fields: [
         {
@@ -224,7 +224,7 @@ export const notifyDiscordReleaseCommand = Command.make(
       yield* postDiscordWebhook(webhookUrl, payload);
       yield* Effect.logInfo("discord release announcement completed");
     }),
-).pipe(Command.withDescription("Post a T3 Code release announcement to Discord."));
+).pipe(Command.withDescription("Post a T-Hermes release announcement to Discord."));
 
 if (import.meta.main) {
   Command.run(notifyDiscordReleaseCommand, { version: "0.0.0" }).pipe(
