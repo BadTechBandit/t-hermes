@@ -48,6 +48,28 @@ exit 0
   return wrapperPath;
 });
 
+const makeSshWrapper = Effect.fn("makeSshWrapper")(function* (input: {
+  readonly stderr: string;
+  readonly exitCode: number;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = yield* fileSystem.makeTempDirectory({
+    directory: NodeOS.tmpdir(),
+    prefix: "hermes-provider-ssh-",
+  });
+  const wrapperPath = path.join(dir, "ssh");
+  const script = `#!/bin/sh
+cat >&2 <<'EOF'
+${input.stderr}
+EOF
+exit ${String(input.exitCode)}
+`;
+  yield* fileSystem.writeFileString(wrapperPath, script);
+  yield* fileSystem.chmod(wrapperPath, 0o755);
+  return dir;
+});
+
 describe("HermesProvider", () => {
   it("includes only ACP-safe slash commands in the initial snapshot", async () => {
     const snapshot = await Effect.runPromise(
@@ -90,6 +112,57 @@ describe("HermesProvider", () => {
 
     expect(snapshot.status).toBe("warning");
     expect(snapshot.slashCommands).toEqual(HERMES_ACP_SLASH_COMMANDS);
+  });
+
+  it("reports Remote Hermes SSH authentication failures as provider errors", async () => {
+    const snapshot = await runNode(
+      Effect.gen(function* () {
+        const sshDir = yield* makeSshWrapper({
+          stderr:
+            "Permission denied, please try again. Received disconnect: Too many authentication failures",
+          exitCode: 255,
+        });
+        return yield* checkHermesProviderStatus(
+          decodeHermesSettings({
+            sshEnabled: true,
+            sshHost: "devbox",
+            sshUsername: "roman",
+          }),
+          {
+            PATH: `${sshDir}:${process.env.PATH ?? ""}`,
+          },
+        );
+      }),
+    );
+
+    expect(snapshot.installed).toBe(false);
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.message).toContain("SSH authentication failed");
+  });
+
+  it("reports a missing remote Hermes binary without falling back to T-Hermes", async () => {
+    const snapshot = await runNode(
+      Effect.gen(function* () {
+        const sshDir = yield* makeSshWrapper({
+          stderr: "Hermes binary not found: hermes",
+          exitCode: 127,
+        });
+        return yield* checkHermesProviderStatus(
+          decodeHermesSettings({
+            sshEnabled: true,
+            sshHost: "devbox",
+          }),
+          {
+            PATH: `${sshDir}:${process.env.PATH ?? ""}`,
+          },
+        );
+      }),
+    );
+
+    expect(snapshot.installed).toBe(false);
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.message).toContain("Hermes was not found on the remote machine");
+    expect(snapshot.message).not.toContain("T-Hermes");
   });
 
   it("maps the Hermes gateway command catalog into slash command metadata", () => {

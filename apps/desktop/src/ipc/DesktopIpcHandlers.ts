@@ -23,6 +23,8 @@ import {
   fetchSshEnvironmentDescriptor,
   fetchSshSessionState,
   issueSshWebSocketToken,
+  prepareSshTarget,
+  resolveSshHostKeyPrompt,
   resolveSshPasswordPrompt,
 } from "./methods/sshEnvironment.ts";
 import {
@@ -58,11 +60,13 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
 
   yield* ipc.handle(discoverSshHosts);
   yield* ipc.handle(ensureSshEnvironment);
+  yield* ipc.handle(prepareSshTarget);
   yield* ipc.handle(disconnectSshEnvironment);
   yield* ipc.handle(fetchSshEnvironmentDescriptor);
   yield* ipc.handle(bootstrapSshBearerSession);
   yield* ipc.handle(fetchSshSessionState);
   yield* ipc.handle(issueSshWebSocketToken);
+  yield* ipc.handle(resolveSshHostKeyPrompt);
   yield* ipc.handle(resolveSshPasswordPrompt);
 
   yield* ipc.handle(getServerExposureState);

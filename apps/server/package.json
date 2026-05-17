@@ -8,6 +8,7 @@
     "directory": "apps/server"
   },
   "bin": {
+    "t-hermes": "./dist/bin.mjs",
     "t3": "./dist/bin.mjs"
   },
   "files": [

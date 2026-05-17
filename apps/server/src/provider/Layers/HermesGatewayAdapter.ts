@@ -38,6 +38,7 @@ import {
   type HermesGatewayRuntime,
   type HermesGatewayRuntimeOptions,
 } from "../hermesGateway/HermesGatewayRuntime.ts";
+import { buildHermesGatewayRuntimeOptions } from "../hermesGateway/HermesGatewaySsh.ts";
 import type {
   HermesGatewayCommandsCatalogResult,
   HermesGatewayEvent,
@@ -984,15 +985,16 @@ export function makeHermesGatewayAdapter(
       Effect.gen(function* () {
         const runtime = yield* Effect.tryPromise({
           try: () => {
-            const runtimeOptions: HermesGatewayRuntimeOptions = {
-              hermesBinaryPath: hermesSettings.binaryPath,
-              cwd: input.cwd ?? process.cwd(),
-              homePath: hermesSettings.homePath,
-              startupTimeoutMs: GATEWAY_STARTUP_TIMEOUT_MS,
-              requestTimeoutMs: GATEWAY_REQUEST_TIMEOUT_MS,
-              ...(options?.environment ? { environment: options.environment } : {}),
-              ...options?.gatewayRuntimeOptions,
-            };
+            const runtimeOptions: HermesGatewayRuntimeOptions = buildHermesGatewayRuntimeOptions(
+              hermesSettings,
+              {
+                cwd: input.cwd ?? process.cwd(),
+                startupTimeoutMs: GATEWAY_STARTUP_TIMEOUT_MS,
+                requestTimeoutMs: GATEWAY_REQUEST_TIMEOUT_MS,
+                ...(options?.environment ? { environment: options.environment } : {}),
+                ...options?.gatewayRuntimeOptions,
+              },
+            );
             return startHermesGatewayRuntime(runtimeOptions);
           },
           catch: (cause) => gatewayRequestError("gateway.start", cause),

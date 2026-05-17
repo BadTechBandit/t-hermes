@@ -12,6 +12,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
+import { buildSshHostKeyArgs, type SshHostKeyOptions } from "./hostKey.ts";
 
 const PUBLISHABLE_T3_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
@@ -86,13 +87,25 @@ export const buildSshHostSpecEffect = (
 
 export function baseSshArgs(
   target: DesktopSshEnvironmentTarget,
-  input?: { readonly batchMode?: "yes" | "no" },
+  input?: {
+    readonly batchMode?: "yes" | "no";
+    readonly passwordAuthOnly?: boolean;
+  } & SshHostKeyOptions,
 ): string[] {
   return [
     "-o",
     `BatchMode=${input?.batchMode ?? "no"}`,
     "-o",
     "ConnectTimeout=10",
+    ...(input?.passwordAuthOnly
+      ? [
+          "-o",
+          "PubkeyAuthentication=no",
+          "-o",
+          "PreferredAuthentications=password,keyboard-interactive",
+        ]
+      : []),
+    ...buildSshHostKeyArgs(input),
     ...(target.port !== null ? ["-p", String(target.port)] : []),
   ];
 }
@@ -164,6 +177,8 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   const args = [
     ...baseSshArgs(target, {
       batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
+      ...(input.passwordAuthOnly === undefined ? {} : { passwordAuthOnly: input.passwordAuthOnly }),
+      ...(input.knownHostsFile === undefined ? {} : { knownHostsFile: input.knownHostsFile }),
     }),
     ...(input.preHostArgs ?? []),
     hostSpec,
@@ -340,4 +355,21 @@ export function resolveRemoteT3CliPackageSpec(input: {
   }
 
   return input.updateChannel === "nightly" ? "t3@nightly" : "t3@latest";
+}
+
+export function resolveRemoteTHermesCliPackageSpec(input: {
+  readonly appVersion: string;
+  readonly updateChannel: DesktopUpdateChannel;
+  readonly isDevelopment?: boolean;
+}): string {
+  const appVersion = input.appVersion.trim();
+  if (!input.isDevelopment && PUBLISHABLE_T3_VERSION_PATTERN.test(appVersion)) {
+    return `t-hermes@${appVersion}`;
+  }
+
+  if (input.isDevelopment) {
+    return "t-hermes@nightly";
+  }
+
+  return input.updateChannel === "nightly" ? "t-hermes@nightly" : "t-hermes@latest";
 }

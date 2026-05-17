@@ -124,6 +124,7 @@ function createBaseServerConfig(): ServerConfig {
         },
         cursor: { enabled: true, binaryPath: "", apiEndpoint: "", customModels: [] },
         hermes: {
+          ...DEFAULT_SERVER_SETTINGS.providers.hermes,
           enabled: true,
           binaryPath: "",
           homePath: "",

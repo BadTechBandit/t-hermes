@@ -17,6 +17,7 @@ import {
   checkHermesProviderStatus,
 } from "../Layers/HermesProvider.ts";
 import { isHermesGatewayRuntimeEnabled } from "../hermesGateway/HermesGatewayMode.ts";
+import { isHermesSshEnabled } from "../hermesGateway/HermesGatewaySsh.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
@@ -83,7 +84,8 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies HermesSettings;
-      const useGatewayRuntime = isHermesGatewayRuntimeEnabled(processEnv);
+      const useGatewayRuntime =
+        isHermesSshEnabled(effectiveConfig) || isHermesGatewayRuntimeEnabled(processEnv);
 
       const adapter = useGatewayRuntime
         ? yield* makeHermesGatewayAdapter(effectiveConfig, {

@@ -15,6 +15,7 @@ import {
   getLastNonEmptyOutputLine,
   parseSshResolveOutput,
   resolveRemoteT3CliPackageSpec,
+  resolveRemoteTHermesCliPackageSpec,
   runSshCommand,
 } from "./command.ts";
 
@@ -78,6 +79,34 @@ describe("ssh command", () => {
     }),
   );
 
+  it.effect("builds password-only ssh args after an in-app password prompt", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        baseSshArgs(
+          {
+            alias: "devbox",
+            hostname: "devbox.example.com",
+            username: "julius",
+            port: 2222,
+          },
+          { batchMode: "no", passwordAuthOnly: true },
+        ),
+        [
+          "-o",
+          "BatchMode=no",
+          "-o",
+          "ConnectTimeout=10",
+          "-o",
+          "PubkeyAuthentication=no",
+          "-o",
+          "PreferredAuthentications=password,keyboard-interactive",
+          "-p",
+          "2222",
+        ],
+      );
+    }),
+  );
+
   it.effect("resolves the remote t3 package spec from the desktop release channel", () =>
     Effect.sync(() => {
       assert.equal(
@@ -109,6 +138,41 @@ describe("ssh command", () => {
           isDevelopment: true,
         }),
         "t3@nightly",
+      );
+    }),
+  );
+
+  it.effect("resolves the remote t-hermes package spec from the desktop release channel", () =>
+    Effect.sync(() => {
+      assert.equal(
+        resolveRemoteTHermesCliPackageSpec({
+          appVersion: "0.0.17",
+          updateChannel: "latest",
+        }),
+        "t-hermes@0.0.17",
+      );
+      assert.equal(
+        resolveRemoteTHermesCliPackageSpec({
+          appVersion: "0.0.17-nightly.20260415.44",
+          updateChannel: "nightly",
+        }),
+        "t-hermes@0.0.17-nightly.20260415.44",
+      );
+      assert.equal(
+        resolveRemoteTHermesCliPackageSpec({
+          appVersion: "0.0.0-dev",
+          updateChannel: "nightly",
+          isDevelopment: true,
+        }),
+        "t-hermes@nightly",
+      );
+      assert.equal(
+        resolveRemoteTHermesCliPackageSpec({
+          appVersion: "0.0.0-dev",
+          updateChannel: "latest",
+          isDevelopment: true,
+        }),
+        "t-hermes@nightly",
       );
     }),
   );

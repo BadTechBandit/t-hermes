@@ -1,4 +1,5 @@
 import {
+  BotIcon,
   ChevronDownIcon,
   ChevronsLeftRightEllipsisIcon,
   PlusIcon,
@@ -16,7 +17,12 @@ import {
   type DesktopSshEnvironmentTarget,
   type DesktopServerExposureState,
   type EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+  type ServerSettings,
 } from "@t3tools/contracts";
+import { DEFAULT_UNIFIED_SETTINGS, type HermesSettings } from "@t3tools/contracts/settings";
 import * as DateTime from "effect/DateTime";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -98,8 +104,22 @@ import {
 import { useUiStateStore } from "~/uiStateStore";
 import { resolveServerConfigVersionMismatch } from "~/versionSkew";
 import { useServerConfig } from "~/rpc/serverState";
+import { ensureLocalApi } from "~/localApi";
+import { useSettings } from "../../hooks/useSettings";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
+const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
+const HERMES_INSTANCE_ID = ProviderInstanceId.make("hermes");
+
+type SavedBackendMode = "remote" | "ssh" | "hermes-ssh";
+
+type RemoteHermesPreflightLevel = "pending" | "success" | "warning" | "error";
+
+interface RemoteHermesPreflightItem {
+  readonly label: string;
+  readonly level: RemoteHermesPreflightLevel;
+  readonly detail: string;
+}
 
 const accessTimestampFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -198,6 +218,131 @@ function formatDesktopSshTarget(target: NonNullable<SavedEnvironmentRecord["desk
   return target.port ? `${authority}:${target.port}` : authority;
 }
 
+function isSshSavedBackendMode(mode: SavedBackendMode): boolean {
+  return mode === "ssh" || mode === "hermes-ssh";
+}
+
+function formatRemoteHermesSshLabel(target: DesktopSshEnvironmentTarget): string {
+  const targetLabel = target.alias.trim() || formatDesktopSshTarget(target);
+  return `Hermes · ${targetLabel}`;
+}
+
+function getHermesProvider(
+  providers: ReadonlyArray<ServerProvider> | null | undefined,
+): ServerProvider | null {
+  return providers?.find((provider) => provider.instanceId === HERMES_INSTANCE_ID) ?? null;
+}
+
+function makePendingRemoteHermesPreflightItems(
+  target: DesktopSshEnvironmentTarget,
+): ReadonlyArray<RemoteHermesPreflightItem> {
+  return [
+    {
+      label: "SSH reachable",
+      level: "pending",
+      detail: `Connecting to ${formatDesktopSshTarget(target)}.`,
+    },
+    {
+      label: "Hermes binary",
+      level: "pending",
+      detail: "Checking the installed Hermes CLI on the remote machine.",
+    },
+    {
+      label: "Hermes version",
+      level: "pending",
+      detail: "Waiting for Hermes version detection.",
+    },
+    {
+      label: "Gateway ready",
+      level: "pending",
+      detail: "Starting the Hermes gateway over SSH.",
+    },
+    {
+      label: "Provider ready",
+      level: "pending",
+      detail: "Refreshing the Hermes provider snapshot.",
+    },
+  ];
+}
+
+function makeRemoteHermesProviderPreflightItems(
+  target: DesktopSshEnvironmentTarget,
+  provider: ServerProvider | null,
+): ReadonlyArray<RemoteHermesPreflightItem> {
+  const slashCommandNames = new Set(provider?.slashCommands.map((command) => command.name) ?? []);
+  const hasGatewayCatalog =
+    slashCommandNames.has("sessions") ||
+    slashCommandNames.has("reasoning") ||
+    slashCommandNames.has("skills") ||
+    (provider?.slashCommands.length ?? 0) > 9;
+
+  return [
+    {
+      label: "SSH reachable",
+      level: "success",
+      detail: `Configured SSH target ${formatDesktopSshTarget(target)}.`,
+    },
+    provider
+      ? {
+          label: "Hermes binary",
+          level: provider.installed ? "success" : "error",
+          detail: provider.installed
+            ? "Hermes is installed on the remote machine."
+            : (provider.message ??
+              "Remote SSH could not find Hermes. Install Hermes on that host or set the remote Hermes binary path."),
+        }
+      : {
+          label: "Hermes binary",
+          level: "warning",
+          detail:
+            "Provider snapshot has not loaded yet. Open the remote environment and refresh providers.",
+        },
+    provider
+      ? {
+          label: "Hermes version",
+          level: provider.installed && provider.version ? "success" : "warning",
+          detail:
+            provider.installed && provider.version
+              ? `Detected ${provider.version}.`
+              : "Hermes did not report a version yet. Open the remote environment and refresh providers.",
+        }
+      : {
+          label: "Hermes version",
+          level: "warning",
+          detail: "Provider snapshot has not loaded yet.",
+        },
+    provider
+      ? {
+          label: "Gateway ready",
+          level: hasGatewayCatalog ? "success" : "warning",
+          detail: hasGatewayCatalog
+            ? "Gateway slash catalog is available."
+            : "Only the fallback command set is visible. Check that the installed Hermes gateway can start over SSH.",
+        }
+      : {
+          label: "Gateway ready",
+          level: "warning",
+          detail: "Waiting for Hermes provider capabilities.",
+        },
+    provider
+      ? {
+          label: "Provider ready",
+          level:
+            provider.enabled && provider.installed && provider.status !== "error"
+              ? "success"
+              : "error",
+          detail:
+            provider.message ??
+            (provider.enabled ? `Status: ${provider.status}.` : "Hermes provider is disabled."),
+        }
+      : {
+          label: "Provider ready",
+          level: "warning",
+          detail: "Provider status is not available yet.",
+        },
+  ];
+}
+
 function parseManualDesktopSshTarget(input: {
   readonly host: string;
   readonly username: string;
@@ -237,7 +382,7 @@ function parseManualDesktopSshTarget(input: {
 
   const rawPort = input.port.trim();
   if (rawPort.length > 0) {
-    port = Number.parseInt(rawPort, 10);
+    port = parseSshPortInput(rawPort);
   }
 
   if (hostname.length === 0) {
@@ -253,6 +398,172 @@ function parseManualDesktopSshTarget(input: {
     hostname,
     username,
     port,
+  };
+}
+
+function parseSshPortInput(rawPort: string): number | null {
+  const trimmed = rawPort.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const port = Number.parseInt(trimmed, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error("SSH port must be between 1 and 65535.");
+  }
+  return port;
+}
+
+function objectConfig(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+interface RemoteHermesConnection {
+  readonly displayName: string;
+  readonly target: DesktopSshEnvironmentTarget;
+  readonly config: HermesSettings;
+}
+
+function isDefaultHermesDisplayName(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return normalized.length === 0 || normalized === "hermes" || normalized === "hermes agent";
+}
+
+function resolveRemoteHermesDisplayName(input: {
+  readonly target: DesktopSshEnvironmentTarget;
+  readonly requestedDisplayName?: string | undefined;
+  readonly existingDisplayName?: string | undefined;
+}): string {
+  const requested = input.requestedDisplayName?.trim();
+  if (requested) {
+    return requested;
+  }
+  const existing = input.existingDisplayName?.trim();
+  if (existing && !isDefaultHermesDisplayName(existing)) {
+    return existing;
+  }
+  return formatRemoteHermesSshLabel(input.target);
+}
+
+function resolveRemoteHermesConnection(
+  settings: Pick<ServerSettings, "providers" | "providerInstances">,
+): RemoteHermesConnection | null {
+  const existingInstance = settings.providerInstances[HERMES_INSTANCE_ID];
+  const existingConfig = (objectConfig(existingInstance?.config) ??
+    settings.providers.hermes ??
+    DEFAULT_UNIFIED_SETTINGS.providers.hermes) as Partial<HermesSettings>;
+  const config: HermesSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS.providers.hermes,
+    ...existingConfig,
+  };
+  const host = config.sshHost.trim();
+  if (!config.sshEnabled || host.length === 0) {
+    return null;
+  }
+  let port: number | null = null;
+  try {
+    port = parseSshPortInput(config.sshPort);
+  } catch {
+    port = null;
+  }
+  const target: DesktopSshEnvironmentTarget = {
+    alias: host,
+    hostname: host,
+    username: config.sshUsername.trim() || null,
+    port,
+  };
+  return {
+    target,
+    config,
+    displayName: resolveRemoteHermesDisplayName({
+      target,
+      existingDisplayName: existingInstance?.displayName,
+    }),
+  };
+}
+
+export function buildRemoteHermesProviderSettingsPatch(input: {
+  readonly settings: Pick<ServerSettings, "providers" | "providerInstances">;
+  readonly target: DesktopSshEnvironmentTarget;
+  readonly displayName?: string | undefined;
+  readonly hermesBinaryPath?: string | undefined;
+  readonly hermesHomePath?: string | undefined;
+  readonly remoteCwd?: string | undefined;
+  readonly knownHostsFile?: string | null | undefined;
+}): Pick<ServerSettings, "providerInstances"> {
+  const existingInstance = input.settings.providerInstances[HERMES_INSTANCE_ID];
+  const existingConfig = (objectConfig(existingInstance?.config) ??
+    input.settings.providers.hermes ??
+    DEFAULT_UNIFIED_SETTINGS.providers.hermes) as Partial<HermesSettings>;
+  const sshPort = input.target.port === null ? "" : String(input.target.port);
+  const nextConfig: HermesSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS.providers.hermes,
+    ...existingConfig,
+    enabled: true,
+    sshEnabled: true,
+    sshHost: input.target.alias.trim() || input.target.hostname.trim(),
+    sshUsername: input.target.username ?? "",
+    sshPort,
+    sshHermesBinaryPath: input.hermesBinaryPath?.trim() ?? "",
+    sshHomePath: input.hermesHomePath?.trim() ?? "",
+    sshRemoteCwd: input.remoteCwd?.trim() ?? "",
+    sshKnownHostsFile: input.knownHostsFile?.trim() ?? "",
+  };
+
+  return {
+    providerInstances: {
+      ...input.settings.providerInstances,
+      [HERMES_INSTANCE_ID]: {
+        driver: HERMES_DRIVER_KIND,
+        ...(existingInstance?.accentColor ? { accentColor: existingInstance.accentColor } : {}),
+        ...(existingInstance?.environment ? { environment: existingInstance.environment } : {}),
+        displayName: resolveRemoteHermesDisplayName({
+          target: input.target,
+          requestedDisplayName: input.displayName,
+          existingDisplayName: existingInstance?.displayName,
+        }),
+        enabled: true,
+        config: nextConfig,
+      },
+    },
+  };
+}
+
+export function buildRemoteHermesDisconnectSettingsPatch(
+  settings: Pick<ServerSettings, "providers" | "providerInstances">,
+): Pick<ServerSettings, "providerInstances"> {
+  const existingInstance = settings.providerInstances[HERMES_INSTANCE_ID];
+  const existingConfig = (objectConfig(existingInstance?.config) ??
+    settings.providers.hermes ??
+    DEFAULT_UNIFIED_SETTINGS.providers.hermes) as Partial<HermesSettings>;
+  const nextConfig: HermesSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS.providers.hermes,
+    ...existingConfig,
+    sshEnabled: false,
+    sshHost: "",
+    sshUsername: "",
+    sshPort: "",
+    sshHermesBinaryPath: "",
+    sshHomePath: "",
+    sshRemoteCwd: "",
+    sshKnownHostsFile: "",
+  };
+  const existingDisplayName = existingInstance?.displayName;
+  return {
+    providerInstances: {
+      ...settings.providerInstances,
+      [HERMES_INSTANCE_ID]: {
+        driver: HERMES_DRIVER_KIND,
+        ...(existingInstance?.accentColor ? { accentColor: existingInstance.accentColor } : {}),
+        ...(existingInstance?.environment ? { environment: existingInstance.environment } : {}),
+        ...(!isDefaultHermesDisplayName(existingDisplayName) && existingDisplayName
+          ? { displayName: existingDisplayName }
+          : {}),
+        enabled: existingInstance?.enabled ?? true,
+        config: nextConfig,
+      },
+    },
   };
 }
 
@@ -1356,17 +1667,19 @@ function SavedBackendListRow({
 interface DesktopSshHostRowProps {
   target: DesktopDiscoveredSshHost;
   connectingHostAlias: string | null;
+  buttonLabel?: string;
   onConnect: (target: DesktopDiscoveredSshHost) => void;
 }
 
 const DesktopSshHostRow = memo(function DesktopSshHostRow({
   target,
   connectingHostAlias,
+  buttonLabel: idleButtonLabel = "Add environment",
   onConnect,
 }: DesktopSshHostRowProps) {
   const address = formatDesktopSshTarget(target);
   const showAddress = address !== target.alias;
-  const buttonLabel = connectingHostAlias === target.alias ? "Adding…" : "Add environment";
+  const buttonLabel = connectingHostAlias === target.alias ? "Connecting…" : idleButtonLabel;
 
   return (
     <div className="border-t border-border/60 px-4 py-3 first:border-t-0 sm:px-5">
@@ -1464,14 +1777,25 @@ export function ConnectionsSettings() {
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
-  const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
+  const [savedBackendMode, setSavedBackendMode] = useState<SavedBackendMode>("remote");
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
   const [savedBackendSshPort, setSavedBackendSshPort] = useState("");
+  const [remoteHermesBinaryPath, setRemoteHermesBinaryPath] = useState("");
+  const [remoteHermesHomePath, setRemoteHermesHomePath] = useState("");
+  const [remoteHermesRemoteCwd, setRemoteHermesRemoteCwd] = useState("");
+  const [remoteHermesCwdDraft, setRemoteHermesCwdDraft] = useState("");
+  const [remoteHermesSettingsError, setRemoteHermesSettingsError] = useState<string | null>(null);
+  const [isUpdatingRemoteHermes, setIsUpdatingRemoteHermes] = useState(false);
+  const [isDisconnectingRemoteHermes, setIsDisconnectingRemoteHermes] = useState(false);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
+  const [remoteHermesPreflightItems, setRemoteHermesPreflightItems] = useState<
+    ReadonlyArray<RemoteHermesPreflightItem>
+  >([]);
+  const settings = useSettings();
   const unsavedDiscoveredSshHosts = useMemo(
     () =>
       discoveredSshHosts.filter((target) => {
@@ -1502,6 +1826,11 @@ export function ConnectionsSettings() {
     DesktopServerExposureState["mode"] | null
   >(null);
   const primaryServerConfig = useServerConfig();
+  const remoteHermesConnection = useMemo(() => resolveRemoteHermesConnection(settings), [settings]);
+  const remoteHermesProvider = useMemo(
+    () => getHermesProvider(primaryServerConfig?.providers),
+    [primaryServerConfig],
+  );
   const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig);
   const [isAdvertisedEndpointListExpanded, setIsAdvertisedEndpointListExpanded] = useState(false);
   const defaultAdvertisedEndpointKey = useUiStateStore(
@@ -1710,9 +2039,71 @@ export function ConnectionsSettings() {
   }, []);
 
   const handleAddSavedBackend = useCallback(async () => {
-    if (savedBackendMode === "ssh") {
+    if (savedBackendMode === "hermes-ssh") {
       setIsAddingSavedBackend(true);
       setSavedBackendError(null);
+      setRemoteHermesPreflightItems([]);
+      try {
+        const target = parseManualDesktopSshTarget({
+          host: savedBackendSshHost,
+          username: savedBackendSshUsername,
+          port: savedBackendSshPort,
+        });
+        setRemoteHermesPreflightItems(makePendingRemoteHermesPreflightItems(target));
+        const prepared = desktopBridge
+          ? await desktopBridge.prepareSshTarget(target)
+          : { target, knownHostsFile: null };
+        const api = ensureLocalApi();
+        const patch = buildRemoteHermesProviderSettingsPatch({
+          settings,
+          target: prepared.target,
+          hermesBinaryPath: remoteHermesBinaryPath,
+          hermesHomePath: remoteHermesHomePath,
+          remoteCwd: remoteHermesRemoteCwd,
+          knownHostsFile: prepared.knownHostsFile,
+        });
+        await api.server.updateSettings(patch);
+        const refreshed = await api.server.refreshProviders();
+        const provider = getHermesProvider(refreshed.providers);
+        setRemoteHermesPreflightItems(
+          makeRemoteHermesProviderPreflightItems(prepared.target, provider),
+        );
+        setSavedBackendHost("");
+        setSavedBackendPairingCode("");
+        setSavedBackendSshHost("");
+        setSavedBackendSshUsername("");
+        setSavedBackendSshPort("");
+        setRemoteHermesBinaryPath("");
+        setRemoteHermesHomePath("");
+        setRemoteHermesRemoteCwd("");
+        toastManager.add({
+          type: "success",
+          title: "Remote Hermes configured",
+          description: `${formatRemoteHermesSshLabel(prepared.target)} is now the Hermes provider target.`,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? formatDesktopSshConnectionError(error)
+            : "Failed to configure Remote Hermes.";
+        setSavedBackendError(message);
+        setRemoteHermesPreflightItems([
+          {
+            label: "Remote Hermes",
+            level: "error",
+            detail: message,
+          },
+        ]);
+      } finally {
+        setIsAddingSavedBackend(false);
+      }
+      return;
+    }
+
+    if (isSshSavedBackendMode(savedBackendMode)) {
+      setIsAddingSavedBackend(true);
+      setSavedBackendError(null);
+      setRemoteHermesPreflightItems([]);
       try {
         const target = parseManualDesktopSshTarget({
           host: savedBackendSshHost,
@@ -1725,7 +2116,6 @@ export function ConnectionsSettings() {
         setSavedBackendSshHost("");
         setSavedBackendSshUsername("");
         setSavedBackendSshPort("");
-
         setAddBackendDialogOpen(false);
         toastManager.add({
           type: "success",
@@ -1783,7 +2173,82 @@ export function ConnectionsSettings() {
     savedBackendSshHost,
     savedBackendSshPort,
     savedBackendSshUsername,
+    remoteHermesBinaryPath,
+    remoteHermesHomePath,
+    remoteHermesRemoteCwd,
+    desktopBridge,
+    settings,
   ]);
+
+  const handleSaveRemoteHermesFolder = useCallback(async () => {
+    if (!remoteHermesConnection) {
+      return;
+    }
+    setIsUpdatingRemoteHermes(true);
+    setRemoteHermesSettingsError(null);
+    try {
+      const api = ensureLocalApi();
+      const patch = buildRemoteHermesProviderSettingsPatch({
+        settings,
+        target: remoteHermesConnection.target,
+        displayName: remoteHermesConnection.displayName,
+        hermesBinaryPath: remoteHermesConnection.config.sshHermesBinaryPath,
+        hermesHomePath: remoteHermesConnection.config.sshHomePath,
+        remoteCwd: remoteHermesCwdDraft,
+        knownHostsFile: remoteHermesConnection.config.sshKnownHostsFile,
+      });
+      await api.server.updateSettings(patch);
+      await api.server.refreshProviders();
+      toastManager.add({
+        type: "success",
+        title: "Remote Hermes folder updated",
+        description: remoteHermesCwdDraft.trim()
+          ? `New Hermes sessions will start in ${remoteHermesCwdDraft.trim()}.`
+          : "New Hermes sessions will start in the remote home directory.",
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to update the Remote Hermes folder.";
+      setRemoteHermesSettingsError(message);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not update Remote Hermes",
+          description: message,
+        }),
+      );
+    } finally {
+      setIsUpdatingRemoteHermes(false);
+    }
+  }, [remoteHermesConnection, remoteHermesCwdDraft, settings]);
+
+  const handleDisconnectRemoteHermes = useCallback(async () => {
+    setIsDisconnectingRemoteHermes(true);
+    setRemoteHermesSettingsError(null);
+    try {
+      const api = ensureLocalApi();
+      await api.server.updateSettings(buildRemoteHermesDisconnectSettingsPatch(settings));
+      await api.server.refreshProviders();
+      toastManager.add({
+        type: "success",
+        title: "Remote Hermes disconnected",
+        description: "Hermes will use the local provider configuration for new sessions.",
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to disconnect Remote Hermes.";
+      setRemoteHermesSettingsError(message);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not disconnect Remote Hermes",
+          description: message,
+        }),
+      );
+    } finally {
+      setIsDisconnectingRemoteHermes(false);
+    }
+  }, [settings]);
 
   const handleConnectSavedBackend = useCallback(async (environmentId: EnvironmentId) => {
     setReconnectingSavedEnvironmentId(environmentId);
@@ -1871,12 +2336,49 @@ export function ConnectionsSettings() {
   const handleConnectSshHost = useCallback(
     async (target: DesktopSshEnvironmentTarget, label?: string) => {
       setConnectingSshHostAlias(target.alias);
-      if (savedBackendMode === "ssh") {
+      const isRemoteHermes = savedBackendMode === "hermes-ssh";
+      if (isSshSavedBackendMode(savedBackendMode)) {
         setSavedBackendError(null);
       } else {
         setDiscoveredSshHostsError(null);
       }
+      setRemoteHermesPreflightItems(
+        isRemoteHermes ? makePendingRemoteHermesPreflightItems(target) : [],
+      );
       try {
+        if (isRemoteHermes) {
+          const prepared = desktopBridge
+            ? await desktopBridge.prepareSshTarget(target)
+            : { target, knownHostsFile: null };
+          const api = ensureLocalApi();
+          const patch = buildRemoteHermesProviderSettingsPatch({
+            settings,
+            target: prepared.target,
+            hermesBinaryPath: remoteHermesBinaryPath,
+            hermesHomePath: remoteHermesHomePath,
+            remoteCwd: remoteHermesRemoteCwd,
+            knownHostsFile: prepared.knownHostsFile,
+          });
+          await api.server.updateSettings(patch);
+          const refreshed = await api.server.refreshProviders();
+          const provider = getHermesProvider(refreshed.providers);
+          setSavedBackendSshHost("");
+          setSavedBackendSshUsername("");
+          setSavedBackendSshPort("");
+          setRemoteHermesBinaryPath("");
+          setRemoteHermesHomePath("");
+          setRemoteHermesRemoteCwd("");
+          setRemoteHermesPreflightItems(
+            makeRemoteHermesProviderPreflightItems(prepared.target, provider),
+          );
+          toastManager.add({
+            type: "success",
+            title: "Remote Hermes configured",
+            description: `${formatRemoteHermesSshLabel(prepared.target)} is now the Hermes provider target.`,
+          });
+          return;
+        }
+
         const record = await connectDesktopSshEnvironment(
           target,
           label === undefined ? undefined : { label },
@@ -1894,20 +2396,37 @@ export function ConnectionsSettings() {
         });
       } catch (error) {
         const message = formatDesktopSshConnectionError(error);
-        if (savedBackendMode === "ssh") {
+        if (isSshSavedBackendMode(savedBackendMode)) {
           setSavedBackendError(message);
         } else {
           setDiscoveredSshHostsError(message);
+        }
+        if (isRemoteHermes) {
+          setRemoteHermesPreflightItems([
+            {
+              label: "SSH / backend",
+              level: "error",
+              detail: message,
+            },
+          ]);
         }
       } finally {
         setConnectingSshHostAlias(null);
       }
     },
-    [savedBackendMode, savedDesktopSshEnvironmentsByAlias],
+    [
+      remoteHermesBinaryPath,
+      remoteHermesHomePath,
+      remoteHermesRemoteCwd,
+      savedBackendMode,
+      savedDesktopSshEnvironmentsByAlias,
+      desktopBridge,
+      settings,
+    ],
   );
 
   useEffect(() => {
-    if (!desktopBridge || !addBackendDialogOpen || savedBackendMode !== "ssh") {
+    if (!desktopBridge || !addBackendDialogOpen || !isSshSavedBackendMode(savedBackendMode)) {
       return;
     }
     if (hasLoadedDiscoveredSshHosts || isLoadingDiscoveredSshHosts) {
@@ -1922,6 +2441,11 @@ export function ConnectionsSettings() {
     loadDiscoveredSshHosts,
     savedBackendMode,
   ]);
+
+  useEffect(() => {
+    setRemoteHermesCwdDraft(remoteHermesConnection?.config.sshRemoteCwd ?? "");
+    setRemoteHermesSettingsError(null);
+  }, [remoteHermesConnection?.config.sshRemoteCwd]);
 
   useEffect(() => {
     if (desktopBridge) {
@@ -2117,7 +2641,7 @@ export function ConnectionsSettings() {
   }, []);
 
   const renderConnectionModeCard = (input: {
-    readonly mode: "remote" | "ssh";
+    readonly mode: SavedBackendMode;
     readonly title: string;
     readonly description: string;
     readonly icon?: ReactNode;
@@ -2134,6 +2658,7 @@ export function ConnectionsSettings() {
         disabled={isAddingSavedBackend}
         onClick={() => {
           setSavedBackendMode(input.mode);
+          setRemoteHermesPreflightItems([]);
         }}
       >
         {input.icon ? (
@@ -2204,9 +2729,47 @@ export function ConnectionsSettings() {
       </Button>
     </div>
   );
+  const renderRemoteHermesPreflight = () =>
+    remoteHermesPreflightItems.length > 0 ? (
+      <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5">
+        <p className="text-xs font-medium text-foreground">Remote Hermes checks</p>
+        <div className="mt-2 space-y-2">
+          {remoteHermesPreflightItems.map((item) => (
+            <div key={item.label} className="flex items-start gap-2">
+              <span
+                className={cn(
+                  "mt-1 size-2 rounded-full",
+                  item.level === "success"
+                    ? "bg-emerald-500"
+                    : item.level === "error"
+                      ? "bg-destructive"
+                      : item.level === "warning"
+                        ? "bg-amber-500"
+                        : "bg-muted-foreground/40",
+                )}
+                aria-hidden
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-foreground">{item.label}</p>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">{item.detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null;
   const renderSshFields = () => (
     <div className="space-y-4">
       <div className="space-y-3">
+        {savedBackendMode === "hermes-ssh" ? (
+          <>
+            <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+              Connects over SSH to the Hermes Agent already installed on that machine. No T-Hermes
+              install is required on the remote host. SSH keys or an active SSH agent are
+              recommended for sessions.
+            </div>
+          </>
+        ) : null}
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-foreground">
             SSH host or alias
@@ -2242,6 +2805,44 @@ export function ConnectionsSettings() {
             />
           </label>
         </div>
+        {savedBackendMode === "hermes-ssh" ? (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">
+                Hermes binary
+              </span>
+              <Input
+                value={remoteHermesBinaryPath}
+                onChange={(event) => setRemoteHermesBinaryPath(event.target.value)}
+                placeholder="hermes"
+                disabled={isAddingSavedBackend}
+                spellCheck={false}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">HERMES_HOME</span>
+              <Input
+                value={remoteHermesHomePath}
+                onChange={(event) => setRemoteHermesHomePath(event.target.value)}
+                placeholder="~/.hermes"
+                disabled={isAddingSavedBackend}
+                spellCheck={false}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">
+                Remote folder
+              </span>
+              <Input
+                value={remoteHermesRemoteCwd}
+                onChange={(event) => setRemoteHermesRemoteCwd(event.target.value)}
+                placeholder="~"
+                disabled={isAddingSavedBackend}
+                spellCheck={false}
+              />
+            </label>
+          </div>
+        ) : null}
         {savedBackendError || discoveredSshHostsError ? (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
             {savedBackendError ?? discoveredSshHostsError}
@@ -2254,9 +2855,16 @@ export function ConnectionsSettings() {
           onClick={() => void handleAddSavedBackend()}
         >
           <PlusIcon className="size-3.5" />
-          {isAddingSavedBackend ? "Adding…" : "Add environment"}
+          {isAddingSavedBackend
+            ? savedBackendMode === "hermes-ssh"
+              ? "Connecting…"
+              : "Adding…"
+            : savedBackendMode === "hermes-ssh"
+              ? "Connect Remote Hermes"
+              : "Add environment"}
         </Button>
       </div>
+      {savedBackendMode === "hermes-ssh" ? renderRemoteHermesPreflight() : null}
       <div className="overflow-hidden rounded-lg border border-border/60">
         <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-3 py-2">
           <div className="min-w-0">
@@ -2284,6 +2892,9 @@ export function ConnectionsSettings() {
                 key={`${target.alias}:${target.hostname}:${target.port ?? ""}`}
                 target={target}
                 connectingHostAlias={connectingSshHostAlias}
+                buttonLabel={
+                  savedBackendMode === "hermes-ssh" ? "Connect Remote Hermes" : "Add environment"
+                }
                 onConnect={(nextTarget) => void handleConnectSshHost(nextTarget)}
               />
             ))}
@@ -2439,6 +3050,103 @@ export function ConnectionsSettings() {
       }
     />
   );
+  const renderRemoteHermesConnectionRow = () => {
+    if (!remoteHermesConnection) {
+      return null;
+    }
+
+    const providerReady =
+      remoteHermesProvider?.enabled === true &&
+      remoteHermesProvider.installed === true &&
+      remoteHermesProvider.status !== "error";
+    const providerChecking = remoteHermesProvider === null || remoteHermesProvider === undefined;
+    const statusLabel = providerChecking
+      ? "Checking"
+      : providerReady
+        ? "Connected"
+        : "Needs attention";
+    const statusDotClassName = providerChecking
+      ? "bg-warning"
+      : providerReady
+        ? "bg-success"
+        : "bg-destructive";
+    const remoteFolder = remoteHermesConnection.config.sshRemoteCwd.trim();
+    const remoteFolderLabel = remoteFolder || "Remote home directory";
+    const cwdDirty = remoteHermesCwdDraft.trim() !== remoteFolder;
+    const targetLabel = formatDesktopSshTarget(remoteHermesConnection.target);
+    const providerDetail =
+      remoteHermesProvider?.message ??
+      (remoteHermesProvider?.version ? `Hermes ${remoteHermesProvider.version}` : statusLabel);
+
+    return (
+      <div className={ITEM_ROW_CLASSNAME}>
+        <div className="space-y-3">
+          <div className={ITEM_ROW_INNER_CLASSNAME}>
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex min-h-5 items-center gap-1.5">
+                <ConnectionStatusDot
+                  tooltipText={providerDetail}
+                  dotClassName={statusDotClassName}
+                  pingClassName={providerChecking ? "bg-warning/60 duration-2000" : null}
+                />
+                <h3 className="text-sm font-medium text-foreground">Remote Hermes</h3>
+                <span className="rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  SSH
+                </span>
+              </div>
+              <p className="truncate text-xs text-muted-foreground" title={targetLabel}>
+                {targetLabel}
+              </p>
+              <p className="truncate text-xs text-muted-foreground" title={remoteFolderLabel}>
+                Remote folder: {remoteFolderLabel}
+              </p>
+            </div>
+            <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+              <Button
+                size="xs"
+                variant="destructive-outline"
+                disabled={isDisconnectingRemoteHermes || isUpdatingRemoteHermes}
+                onClick={() => void handleDisconnectRemoteHermes()}
+              >
+                {isDisconnectingRemoteHermes ? "Disconnecting…" : "Disconnect"}
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-xs font-medium text-foreground">
+                Remote project folder
+              </span>
+              <Input
+                value={remoteHermesCwdDraft}
+                onChange={(event) => setRemoteHermesCwdDraft(event.target.value)}
+                placeholder="Remote home directory"
+                disabled={isUpdatingRemoteHermes || isDisconnectingRemoteHermes}
+                spellCheck={false}
+              />
+            </label>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!cwdDirty || isUpdatingRemoteHermes || isDisconnectingRemoteHermes}
+              onClick={() => void handleSaveRemoteHermesFolder()}
+            >
+              {isUpdatingRemoteHermes ? "Saving…" : "Save folder"}
+            </Button>
+          </div>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            New Hermes sessions run in this remote folder. Local checkout stays local and is not the
+            remote project path.
+          </p>
+          {remoteHermesSettingsError ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              {remoteHermesSettingsError}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <SettingsPageContainer>
@@ -2659,6 +3367,7 @@ export function ConnectionsSettings() {
               setAddBackendDialogOpen(open);
               if (!open) {
                 setSavedBackendError(null);
+                setRemoteHermesPreflightItems([]);
               }
             }}
           >
@@ -2682,14 +3391,20 @@ export function ConnectionsSettings() {
               />
               <TooltipPopup side="top">Add environment</TooltipPopup>
             </Tooltip>
-            <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
+            <DialogPopup className="max-h-[80dvh] sm:max-w-4xl">
               <DialogHeader>
-                <DialogTitle>Add Environment</DialogTitle>
-                <DialogDescription>Pair another environment to this client.</DialogDescription>
+                <DialogTitle>
+                  {savedBackendMode === "hermes-ssh" ? "Connect Remote Hermes" : "Add Environment"}
+                </DialogTitle>
+                <DialogDescription>
+                  {savedBackendMode === "hermes-ssh"
+                    ? "Connect over SSH to the Hermes Agent already installed on another machine."
+                    : "Pair another environment to this client."}
+                </DialogDescription>
               </DialogHeader>
               <DialogPanel>
                 <div className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-3">
                     {renderConnectionModeCard({
                       mode: "remote",
                       title: "Remote link",
@@ -2704,9 +3419,20 @@ export function ConnectionsSettings() {
                           icon: <TerminalIcon aria-hidden className="size-4" />,
                         })
                       : null}
+                    {desktopBridge
+                      ? renderConnectionModeCard({
+                          mode: "hermes-ssh",
+                          title: "Remote Hermes",
+                          description:
+                            "Use the regular Hermes Agent already installed on another machine.",
+                          icon: <BotIcon aria-hidden className="size-4" />,
+                        })
+                      : null}
                   </div>
                   <AnimatedHeight>
-                    {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
+                    {isSshSavedBackendMode(savedBackendMode)
+                      ? renderSshFields()
+                      : renderRemoteModeBody()}
                   </AnimatedHeight>
                 </div>
               </DialogPanel>
@@ -2714,6 +3440,16 @@ export function ConnectionsSettings() {
           </Dialog>
         }
       >
+        <div className={ITEM_ROW_CLASSNAME}>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            To connect to a remote Hermes Agent over SSH, click &ldquo;Add environment&rdquo; and
+            choose &ldquo;Remote Hermes&rdquo;. This uses the Hermes install on that machine; it
+            does not install T-Hermes remotely.
+          </p>
+        </div>
+
+        {renderRemoteHermesConnectionRow()}
+
         {savedEnvironmentIds.map((environmentId) => (
           <SavedBackendListRow
             key={environmentId}
@@ -2727,11 +3463,10 @@ export function ConnectionsSettings() {
           />
         ))}
 
-        {savedEnvironmentIds.length === 0 ? (
+        {savedEnvironmentIds.length === 0 && !remoteHermesConnection ? (
           <div className={ITEM_ROW_CLASSNAME}>
             <p className="text-xs text-muted-foreground">
-              No remote environments yet. Click &ldquo;Add environment&rdquo; to pair another
-              environment.
+              No paired remote backend environments yet.
             </p>
           </div>
         ) : null}

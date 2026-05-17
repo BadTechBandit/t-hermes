@@ -285,6 +285,36 @@ export const DesktopSshPasswordPromptRequestSchema = Schema.Struct({
   expiresAt: Schema.String,
 });
 
+export interface DesktopSshHostKeyFingerprint {
+  keyType: string;
+  fingerprint: string;
+}
+
+export const DesktopSshHostKeyFingerprintSchema = Schema.Struct({
+  keyType: Schema.String,
+  fingerprint: Schema.String,
+});
+
+export interface DesktopSshHostKeyPromptRequest {
+  requestId: string;
+  destination: string;
+  hostname: string;
+  username: string | null;
+  port: number | null;
+  fingerprints: readonly DesktopSshHostKeyFingerprint[];
+  expiresAt: string;
+}
+
+export const DesktopSshHostKeyPromptRequestSchema = Schema.Struct({
+  requestId: Schema.String,
+  destination: Schema.String,
+  hostname: Schema.String,
+  username: Schema.NullOr(Schema.String),
+  port: Schema.NullOr(Schema.Number),
+  fingerprints: Schema.Array(DesktopSshHostKeyFingerprintSchema),
+  expiresAt: Schema.String,
+});
+
 export const DesktopSshPasswordPromptCancelledType = "ssh-password-prompt-cancelled" as const;
 
 export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
@@ -306,6 +336,16 @@ export const DesktopSshEnvironmentEnsureResultSchema = Schema.Union([
   DesktopSshPasswordPromptCancelledResultSchema,
 ]);
 
+export interface DesktopSshTargetPreparationResult {
+  target: DesktopSshEnvironmentTarget;
+  knownHostsFile: string | null;
+}
+
+export const DesktopSshTargetPreparationResultSchema = Schema.Struct({
+  target: DesktopSshEnvironmentTargetSchema,
+  knownHostsFile: Schema.NullOr(Schema.String),
+});
+
 export const DesktopSshHttpBaseUrlInputSchema = Schema.Struct({
   httpBaseUrl: Schema.String,
 });
@@ -323,6 +363,11 @@ export const DesktopSshBearerBootstrapInputSchema = Schema.Struct({
 export const DesktopSshPasswordPromptResolutionInputSchema = Schema.Struct({
   requestId: Schema.String,
   password: Schema.NullOr(Schema.String),
+});
+
+export const DesktopSshHostKeyPromptResolutionInputSchema = Schema.Struct({
+  requestId: Schema.String,
+  trusted: Schema.Boolean,
 });
 
 export const PersistedSavedEnvironmentRecordSchema = Schema.Struct({
@@ -384,6 +429,9 @@ export interface DesktopBridge {
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean },
   ) => Promise<DesktopSshEnvironmentBootstrap>;
+  prepareSshTarget: (
+    target: DesktopSshEnvironmentTarget,
+  ) => Promise<DesktopSshTargetPreparationResult>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
   bootstrapSshBearerSession: (
@@ -397,6 +445,8 @@ export interface DesktopBridge {
   ) => Promise<AuthWebSocketTokenResult>;
   onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
+  onSshHostKeyPrompt: (listener: (request: DesktopSshHostKeyPromptRequest) => void) => () => void;
+  resolveSshHostKeyPrompt: (requestId: string, trusted: boolean) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
   setTailscaleServeEnabled: (input: {

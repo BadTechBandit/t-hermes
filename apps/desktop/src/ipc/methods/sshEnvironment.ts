@@ -6,8 +6,10 @@ import {
   DesktopSshEnvironmentEnsureResultSchema,
   DesktopSshEnvironmentTargetSchema,
   DesktopSshHttpBaseUrlInputSchema,
+  DesktopSshHostKeyPromptResolutionInputSchema,
   DesktopSshPasswordPromptCancelledType,
   DesktopSshPasswordPromptResolutionInputSchema,
+  DesktopSshTargetPreparationResultSchema,
   ExecutionEnvironmentDescriptor,
   AuthBearerBootstrapResult,
   AuthSessionState,
@@ -19,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as IpcChannels from "../channels.ts";
 import { makeIpcMethod } from "../DesktopIpc.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
+import * as DesktopSshHostKeyPrompts from "../../ssh/DesktopSshHostKeyPrompts.ts";
 import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopSshRemoteApi from "../../ssh/DesktopSshRemoteApi.ts";
 
@@ -51,6 +54,16 @@ export const ensureSshEnvironment = makeIpcMethod({
           : Effect.fail(error),
       ),
     );
+  }),
+});
+
+export const prepareSshTarget = makeIpcMethod({
+  channel: IpcChannels.PREPARE_SSH_TARGET_CHANNEL,
+  payload: DesktopSshEnvironmentTargetSchema,
+  result: DesktopSshTargetPreparationResultSchema,
+  handler: Effect.fn("desktop.ipc.sshEnvironment.prepareTarget")(function* (target) {
+    const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
+    return yield* sshEnvironment.prepareTarget(target);
   }),
 });
 
@@ -123,5 +136,18 @@ export const resolveSshPasswordPrompt = makeIpcMethod({
   }) {
     const prompts = yield* DesktopSshPasswordPrompts.DesktopSshPasswordPrompts;
     yield* prompts.resolve({ requestId, password });
+  }),
+});
+
+export const resolveSshHostKeyPrompt = makeIpcMethod({
+  channel: IpcChannels.RESOLVE_SSH_HOST_KEY_PROMPT_CHANNEL,
+  payload: DesktopSshHostKeyPromptResolutionInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.sshEnvironment.resolveHostKeyPrompt")(function* ({
+    requestId,
+    trusted,
+  }) {
+    const prompts = yield* DesktopSshHostKeyPrompts.DesktopSshHostKeyPrompts;
+    yield* prompts.resolve({ requestId, trusted });
   }),
 });

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as DesktopSshEnvironment from "./DesktopSshEnvironment.ts";
+import * as DesktopSshHostKeyPrompts from "./DesktopSshHostKeyPrompts.ts";
 import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
 
 function makeTempHomeDir() {
@@ -100,6 +101,13 @@ describe("sshEnvironment", () => {
     }).pipe(
       Effect.provide(
         DesktopSshEnvironment.layer().pipe(
+          Layer.provideMerge(
+            Layer.succeed(DesktopSshHostKeyPrompts.DesktopSshHostKeyPrompts, {
+              request: () => Effect.die("unexpected host key prompt request"),
+              resolve: () => Effect.die("unexpected host key prompt resolution"),
+              cancelPending: () => Effect.void,
+            }),
+          ),
           Layer.provideMerge(
             Layer.succeed(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {
               request: () => Effect.die("unexpected password prompt request"),

@@ -77,6 +77,14 @@ describe("HermesSettings", () => {
       binaryPath: "hermes",
       homePath: "",
       authMethodId: "",
+      sshEnabled: false,
+      sshHost: "",
+      sshUsername: "",
+      sshPort: "",
+      sshHermesBinaryPath: "",
+      sshHomePath: "",
+      sshRemoteCwd: "",
+      sshKnownHostsFile: "",
       customModels: [],
     });
   });
@@ -91,6 +99,14 @@ describe("HermesSettings", () => {
           binaryPath: "  /usr/local/bin/hermes  ",
           homePath: "  ~/.hermes-work  ",
           authMethodId: "  openai-codex  ",
+          sshEnabled: true,
+          sshHost: "  devbox  ",
+          sshUsername: "  roman  ",
+          sshPort: "  2222  ",
+          sshHermesBinaryPath: "  /opt/homebrew/bin/hermes  ",
+          sshHomePath: "  /Users/roman/.hermes  ",
+          sshRemoteCwd: "  /Users/roman/project  ",
+          sshKnownHostsFile: "  /Users/roman/.t3/dev/ssh/known_hosts  ",
         },
       },
     });
@@ -99,6 +115,14 @@ describe("HermesSettings", () => {
       binaryPath: "/usr/local/bin/hermes",
       homePath: "~/.hermes-work",
       authMethodId: "openai-codex",
+      sshEnabled: true,
+      sshHost: "devbox",
+      sshUsername: "roman",
+      sshPort: "2222",
+      sshHermesBinaryPath: "/opt/homebrew/bin/hermes",
+      sshHomePath: "/Users/roman/.hermes",
+      sshRemoteCwd: "/Users/roman/project",
+      sshKnownHostsFile: "/Users/roman/.t3/dev/ssh/known_hosts",
     });
   });
 });

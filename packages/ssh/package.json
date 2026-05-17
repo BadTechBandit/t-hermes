@@ -20,6 +20,10 @@
       "types": "./src/errors.ts",
       "import": "./src/errors.ts"
     },
+    "./hostKey": {
+      "types": "./src/hostKey.ts",
+      "import": "./src/hostKey.ts"
+    },
     "./tunnel": {
       "types": "./src/tunnel.ts",
       "import": "./src/tunnel.ts"

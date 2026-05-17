@@ -183,6 +183,10 @@ function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridg
     ensureSshEnvironment: async () => {
       throw new Error("ensureSshEnvironment not implemented in test");
     },
+    prepareSshTarget: async (target) => ({
+      target,
+      knownHostsFile: null,
+    }),
     disconnectSshEnvironment: async () => undefined,
     fetchSshEnvironmentDescriptor: async () => {
       throw new Error("fetchSshEnvironmentDescriptor not implemented in test");
@@ -198,6 +202,8 @@ function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridg
     },
     onSshPasswordPrompt: () => () => undefined,
     resolveSshPasswordPrompt: async () => undefined,
+    onSshHostKeyPrompt: () => () => undefined,
+    resolveSshHostKeyPrompt: async () => undefined,
     getServerExposureState: async () => ({
       mode: "local-only",
       endpointUrl: null,

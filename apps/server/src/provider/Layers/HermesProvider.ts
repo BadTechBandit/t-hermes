@@ -18,6 +18,12 @@ import {
   startHermesGatewayRuntime,
   type HermesGatewayRuntimeOptions,
 } from "../hermesGateway/HermesGatewayRuntime.ts";
+import {
+  buildHermesGatewayRuntimeOptions,
+  buildHermesSshVersionArgs,
+  isHermesSshEnabled,
+  resolveHermesSshTarget,
+} from "../hermesGateway/HermesGatewaySsh.ts";
 import type {
   HermesGatewayCommandsCatalogResult,
   HermesGatewayModelOptionsResult,
@@ -51,6 +57,33 @@ class HermesGatewayDiscoveryError extends Data.TaggedError("HermesGatewayDiscove
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+function remoteHermesProbeFailureMessage(result: CommandResult): string {
+  const output = `${result.stderr}\n${result.stdout}`.trim();
+  const normalized = output.toLowerCase();
+  if (
+    normalized.includes("host key verification failed") ||
+    normalized.includes("remote host identification has changed")
+  ) {
+    return "SSH host key is not trusted yet. Review the fingerprint and approve it, then try Remote Hermes again.";
+  }
+  if (
+    normalized.includes("permission denied") ||
+    normalized.includes("too many authentication failures") ||
+    normalized.includes("authentication failed")
+  ) {
+    return "SSH authentication failed. Check the username, SSH key, agent, or password for this remote machine.";
+  }
+  if (
+    normalized.includes("hermes binary not found") ||
+    normalized.includes("command not found") ||
+    result.code === 127
+  ) {
+    return "Hermes was not found on the remote machine. Install Hermes there or set the remote Hermes binary path.";
+  }
+  const detail = output || `exit code ${String(result.code)}`;
+  return `Failed to run remote Hermes health check over SSH: ${detail}.`;
+}
 
 export const HERMES_ACP_SLASH_COMMANDS = [
   { name: "help", description: "List available commands" },
@@ -268,15 +301,16 @@ const discoverHermesGatewaySnapshot = (
 ): Effect.Effect<HermesGatewayDiscovery, HermesGatewayDiscoveryError> =>
   Effect.tryPromise({
     try: async () => {
-      const runtimeOptions: HermesGatewayRuntimeOptions = {
-        hermesBinaryPath: hermesSettings.binaryPath,
-        cwd: process.cwd(),
-        homePath: hermesSettings.homePath,
-        environment,
-        startupTimeoutMs: GATEWAY_DISCOVERY_TIMEOUT_MS,
-        requestTimeoutMs: GATEWAY_DISCOVERY_TIMEOUT_MS,
-        shutdownTimeoutMs: 750,
-      };
+      const runtimeOptions: HermesGatewayRuntimeOptions = buildHermesGatewayRuntimeOptions(
+        hermesSettings,
+        {
+          cwd: process.cwd(),
+          environment,
+          startupTimeoutMs: GATEWAY_DISCOVERY_TIMEOUT_MS,
+          requestTimeoutMs: GATEWAY_DISCOVERY_TIMEOUT_MS,
+          shutdownTimeoutMs: 750,
+        },
+      );
       const runtime = await startHermesGatewayRuntime(runtimeOptions);
       try {
         const session = await runtime.request<{ readonly session_id: string }>("session.create", {
@@ -316,7 +350,9 @@ export function buildInitialHermesProviderSnapshot(
   return Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
     const models = getHermesFallbackModels(hermesSettings);
-    const slashCommands = getHermesSlashCommandsForEnvironment(environment);
+    const slashCommands = isHermesSshEnabled(hermesSettings)
+      ? HERMES_GATEWAY_SLASH_COMMANDS
+      : getHermesSlashCommandsForEnvironment(environment);
 
     if (!hermesSettings.enabled) {
       return buildServerProvider({
@@ -359,14 +395,25 @@ const runHermesCommand = (
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const env = {
-      ...environment,
-      ...(hermesSettings.homePath ? { HERMES_HOME: hermesSettings.homePath } : {}),
-    };
-    const command = ChildProcess.make(hermesSettings.binaryPath, [...args], {
-      env,
-      shell: process.platform === "win32",
-    });
+    const sshTarget = resolveHermesSshTarget(hermesSettings);
+    if (sshTarget && !(args.length === 1 && args[0] === "--version")) {
+      throw new Error("Remote Hermes SSH only supports direct Hermes version probes.");
+    }
+    const env = sshTarget
+      ? environment
+      : {
+          ...environment,
+          ...(hermesSettings.homePath ? { HERMES_HOME: hermesSettings.homePath } : {}),
+        };
+    const command = sshTarget
+      ? ChildProcess.make("ssh", buildHermesSshVersionArgs(sshTarget), {
+          env,
+          shell: process.platform === "win32",
+        })
+      : ChildProcess.make(hermesSettings.binaryPath, [...args], {
+          env,
+          shell: process.platform === "win32",
+        });
     const child = yield* spawner.spawn(command);
     const [stdout, stderr, exitCode] = yield* Effect.all(
       [
@@ -386,7 +433,10 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const models = getHermesFallbackModels(hermesSettings);
-  const slashCommands = getHermesSlashCommandsForEnvironment(environment);
+  const remoteSshEnabled = isHermesSshEnabled(hermesSettings);
+  const slashCommands = remoteSshEnabled
+    ? HERMES_GATEWAY_SLASH_COMMANDS
+    : getHermesSlashCommandsForEnvironment(environment);
 
   if (!hermesSettings.enabled) {
     return buildServerProvider({
@@ -424,7 +474,9 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
         status: "error",
         auth: { status: "unknown" },
         message: isCommandMissingCause(error)
-          ? "Hermes CLI (`hermes`) is not installed or not on PATH."
+          ? remoteSshEnabled
+            ? "Hermes CLI (`hermes`) was not found on the remote SSH machine. Install Hermes there or set the remote Hermes binary path."
+            : "Hermes CLI (`hermes`) is not installed or not on PATH."
           : `Failed to execute Hermes CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       },
     });
@@ -461,9 +513,10 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
         enabled: hermesSettings.enabled,
         checkedAt,
         models: gateway.models,
-        slashCommands: isHermesGatewayRuntimeEnabled(environment)
-          ? gateway.slashCommands
-          : slashCommands,
+        slashCommands:
+          remoteSshEnabled || isHermesGatewayRuntimeEnabled(environment)
+            ? gateway.slashCommands
+            : slashCommands,
         skills: gateway.skills,
         probe: {
           installed: true,
@@ -506,11 +559,13 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
     models,
     slashCommands,
     probe: {
-      installed: true,
+      installed: !remoteSshEnabled,
       version,
-      status: "warning",
+      status: remoteSshEnabled ? "error" : "warning",
       auth: { status: "unknown" },
-      message: "Hermes CLI responded with a non-zero exit code.",
+      message: remoteSshEnabled
+        ? remoteHermesProbeFailureMessage(result)
+        : "Hermes CLI responded with a non-zero exit code.",
     },
   });
 });

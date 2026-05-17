@@ -29,6 +29,8 @@ export interface SshAuthOptions {
   readonly authSecret?: string | null;
   readonly batchMode?: "yes" | "no";
   readonly interactiveAuth?: boolean;
+  readonly knownHostsFile?: string | null;
+  readonly passwordAuthOnly?: boolean;
 }
 
 export interface SshPasswordPromptShape {

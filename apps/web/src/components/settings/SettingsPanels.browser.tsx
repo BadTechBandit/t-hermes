@@ -356,6 +356,10 @@ const createDesktopBridgeStub = (overrides?: {
     setSavedEnvironmentSecret: vi.fn().mockResolvedValue(true),
     removeSavedEnvironmentSecret: vi.fn().mockResolvedValue(undefined),
     discoverSshHosts: overrides?.discoverSshHosts ?? vi.fn().mockResolvedValue([]),
+    prepareSshTarget: vi.fn().mockImplementation(async (target) => ({
+      target,
+      knownHostsFile: "/Users/roman/.t3/dev/ssh/known_hosts",
+    })),
     ensureSshEnvironment: vi.fn().mockImplementation(async (target) => ({
       target,
       httpBaseUrl: "http://127.0.0.1:3774/",
@@ -400,6 +404,8 @@ const createDesktopBridgeStub = (overrides?: {
     }),
     onSshPasswordPrompt: vi.fn(() => () => {}),
     resolveSshPasswordPrompt: vi.fn().mockResolvedValue(undefined),
+    onSshHostKeyPrompt: vi.fn(() => () => {}),
+    resolveSshHostKeyPrompt: vi.fn().mockResolvedValue(undefined),
     getServerExposureState: vi.fn().mockResolvedValue(
       overrides?.serverExposureState ?? {
         mode: "local-only",
@@ -1040,6 +1046,175 @@ describe("GeneralSettingsPanel observability", () => {
         { label: "" },
       );
     });
+  });
+
+  it("configures Remote Hermes without using the generic SSH backend launcher", async () => {
+    const desktopBridge = createDesktopBridgeStub({
+      discoverSshHosts: vi.fn().mockResolvedValue([]),
+    });
+    window.desktopBridge = desktopBridge;
+    const updateSettings = vi
+      .fn<LocalApi["server"]["updateSettings"]>()
+      .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
+    const refreshProviders = vi.fn<LocalApi["server"]["refreshProviders"]>().mockResolvedValue({
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("hermes"),
+          driver: ProviderDriverKind.make("hermes"),
+          enabled: true,
+          installed: true,
+          version: "v2026.5.7",
+          status: "ready",
+          auth: { status: "authenticated" },
+          checkedAt: "2036-04-07T00:00:00.000Z",
+          models: [],
+          slashCommands: [
+            { name: "sessions", description: "List sessions" },
+            { name: "reasoning", description: "Manage reasoning" },
+          ],
+          skills: [],
+        },
+      ],
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+        refreshProviders,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ConnectionsSettings />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Add environment", exact: true }).click();
+    const addEnvironmentDialog = page.getByRole("dialog", { name: "Add Environment" });
+    await expect
+      .element(addEnvironmentDialog.getByRole("button", { name: /^SSH\b/ }))
+      .toBeInTheDocument();
+
+    await addEnvironmentDialog.getByRole("button", { name: /^Remote Hermes\b/ }).click();
+    const remoteHermesDialog = page.getByRole("dialog", { name: "Connect Remote Hermes" });
+    await expect.element(remoteHermesDialog).toBeInTheDocument();
+    await expect
+      .element(page.getByText(/No T-Hermes install is required on the remote host/u))
+      .toBeInTheDocument();
+
+    await remoteHermesDialog.getByLabelText("SSH host or alias").fill("hermes-devbox");
+    await remoteHermesDialog
+      .getByRole("button", { name: "Connect Remote Hermes", exact: true })
+      .last()
+      .click();
+
+    await vi.waitFor(() => {
+      expect(updateSettings).toHaveBeenCalled();
+    });
+    expect(mockConnectDesktopSshEnvironment).not.toHaveBeenCalled();
+    expect(desktopBridge.prepareSshTarget).toHaveBeenCalledWith({
+      alias: "hermes-devbox",
+      hostname: "hermes-devbox",
+      username: null,
+      port: null,
+    });
+    expect(JSON.stringify(updateSettings.mock.calls[0]?.[0])).toContain('"sshEnabled":true');
+    expect(JSON.stringify(updateSettings.mock.calls[0]?.[0])).toContain(
+      '"sshKnownHostsFile":"/Users/roman/.t3/dev/ssh/known_hosts"',
+    );
+    expect(JSON.stringify(updateSettings.mock.calls[0]?.[0])).not.toContain("t-hermes@nightly");
+    await expect.element(page.getByText("Remote Hermes checks")).toBeInTheDocument();
+    await expect.element(page.getByText("Hermes version")).toBeInTheDocument();
+    await expect.element(page.getByText("Gateway ready")).toBeInTheDocument();
+  });
+
+  it("shows active Remote Hermes SSH state and remote project folder controls", async () => {
+    window.desktopBridge = createDesktopBridgeStub();
+    const updateSettings = vi
+      .fn<LocalApi["server"]["updateSettings"]>()
+      .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
+    const refreshProviders = vi.fn<LocalApi["server"]["refreshProviders"]>().mockResolvedValue({
+      providers: [],
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+        refreshProviders,
+      },
+    } as unknown as LocalApi;
+
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("hermes"),
+          driver: ProviderDriverKind.make("hermes"),
+          displayName: "Hermes · remote-hermes",
+          enabled: true,
+          installed: true,
+          version: "v2026.5.7",
+          status: "ready",
+          auth: { status: "authenticated" },
+          checkedAt: "2036-04-07T00:00:00.000Z",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        },
+      ],
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [ProviderInstanceId.make("hermes")]: {
+            driver: ProviderDriverKind.make("hermes"),
+            displayName: "Hermes · remote-hermes",
+            enabled: true,
+            config: {
+              ...DEFAULT_SERVER_SETTINGS.providers.hermes,
+              sshEnabled: true,
+              sshHost: "remote-hermes",
+              sshUsername: "roman",
+              sshPort: "22",
+              sshRemoteCwd: "/Users/roman/project",
+              sshKnownHostsFile: "/Users/roman/.t3/dev/ssh/known_hosts",
+            },
+          },
+        },
+      },
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ConnectionsSettings />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByRole("heading", { name: "Remote Hermes", exact: true }))
+      .toBeInTheDocument();
+    await expect.element(page.getByText("roman@remote-hermes:22")).toBeInTheDocument();
+    await expect.element(page.getByText("Remote folder: /Users/roman/project")).toBeInTheDocument();
+
+    const remoteFolderInput = page.getByLabelText("Remote project folder");
+    await expect.element(remoteFolderInput).toHaveValue("/Users/roman/project");
+    await remoteFolderInput.fill("/Users/roman/other-project");
+    await page.getByRole("button", { name: "Save folder" }).click();
+
+    await vi.waitFor(() => {
+      expect(updateSettings).toHaveBeenCalled();
+    });
+    expect(JSON.stringify(updateSettings.mock.calls[0]?.[0])).toContain(
+      '"/Users/roman/other-project"',
+    );
   });
 
   it("opens the logs folder in the preferred editor", async () => {
