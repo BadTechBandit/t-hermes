@@ -1,12 +1,15 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  type HermesProfile,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderInstanceConfig,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  buildHermesProfileProviderSettingsPatch,
   buildProviderInstanceUpdatePatch,
+  findHermesProfileProviderInstanceId,
   formatDiagnosticsDescription,
 } from "./SettingsPanels.logic";
 
@@ -100,5 +103,128 @@ describe("buildProviderInstanceUpdatePatch", () => {
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
     expect(patch.providers).toBeUndefined();
+  });
+});
+
+describe("Hermes profile provider instances", () => {
+  const coderProfile = {
+    id: "coder",
+    name: "coder",
+    displayName: "coder",
+    homePath: "/Users/example/.hermes/profiles/coder",
+    kind: "profile",
+  } satisfies HermesProfile;
+
+  it("adds a Hermes profile as an isolated provider instance", () => {
+    const patch = buildHermesProfileProviderSettingsPatch({
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          hermes: {
+            ...DEFAULT_SERVER_SETTINGS.providers.hermes,
+            binaryPath: "/opt/bin/hermes",
+            authMethodId: "openai-codex",
+            sshEnabled: true,
+            sshHost: "remote.example.com",
+            sshHomePath: "/remote/hermes",
+          },
+        },
+      },
+      profile: coderProfile,
+    });
+
+    const instance = patch?.providerInstances?.[ProviderInstanceId.make("hermes_coder")];
+    expect(instance).toMatchObject({
+      driver: ProviderDriverKind.make("hermes"),
+      displayName: "Hermes - coder",
+      enabled: true,
+    });
+    expect(instance?.config).toMatchObject({
+      binaryPath: "/opt/bin/hermes",
+      authMethodId: "openai-codex",
+      homePath: "/Users/example/.hermes/profiles/coder",
+      sshEnabled: false,
+      sshHost: "",
+      sshHomePath: "",
+    });
+  });
+
+  it("does not add a duplicate provider for an existing profile home", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("hermes_coder")]: {
+          driver: ProviderDriverKind.make("hermes"),
+          enabled: true,
+          config: {
+            ...DEFAULT_SERVER_SETTINGS.providers.hermes,
+            homePath: "/Users/example/.hermes/profiles/coder/",
+          },
+        },
+      },
+    };
+
+    expect(findHermesProfileProviderInstanceId(settings, coderProfile)).toBe(
+      ProviderInstanceId.make("hermes_coder"),
+    );
+    expect(buildHermesProfileProviderSettingsPatch({ settings, profile: coderProfile })).toBeNull();
+  });
+
+  it("treats the default Hermes profile as the built-in Hermes provider", () => {
+    const defaultProfile = {
+      id: "default",
+      name: "default",
+      displayName: "Default",
+      homePath: "/Users/example/.hermes",
+      kind: "default",
+    } satisfies HermesProfile;
+
+    expect(findHermesProfileProviderInstanceId(DEFAULT_SERVER_SETTINGS, defaultProfile)).toBe(
+      ProviderInstanceId.make("hermes"),
+    );
+    expect(
+      buildHermesProfileProviderSettingsPatch({
+        settings: DEFAULT_SERVER_SETTINGS,
+        profile: defaultProfile,
+      }),
+    ).toBeNull();
+  });
+
+  it("can add the local default profile when the built-in Hermes instance is remote", () => {
+    const defaultProfile = {
+      id: "default",
+      name: "default",
+      displayName: "Default",
+      homePath: "/Users/example/.hermes",
+      kind: "default",
+    } satisfies HermesProfile;
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("hermes")]: {
+          driver: ProviderDriverKind.make("hermes"),
+          enabled: true,
+          config: {
+            ...DEFAULT_SERVER_SETTINGS.providers.hermes,
+            sshEnabled: true,
+            sshHost: "remote.example.com",
+          },
+        },
+      },
+    };
+
+    const patch = buildHermesProfileProviderSettingsPatch({ settings, profile: defaultProfile });
+
+    expect(findHermesProfileProviderInstanceId(settings, defaultProfile)).toBeUndefined();
+    expect(patch?.providerInstances?.[ProviderInstanceId.make("hermes_default")]).toMatchObject({
+      driver: ProviderDriverKind.make("hermes"),
+      displayName: "Hermes - Default",
+      config: {
+        homePath: "/Users/example/.hermes",
+        sshEnabled: false,
+        sshHost: "",
+      },
+    });
   });
 });

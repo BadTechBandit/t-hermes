@@ -194,6 +194,25 @@ export type ServerProvider = typeof ServerProvider.Type;
 export const ServerProviders = Schema.Array(ServerProvider);
 export type ServerProviders = typeof ServerProviders.Type;
 
+export const HermesProfileKind = Schema.Literals(["default", "profile"]);
+export type HermesProfileKind = typeof HermesProfileKind.Type;
+
+export const HermesProfile = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  displayName: TrimmedNonEmptyString,
+  homePath: TrimmedNonEmptyString,
+  kind: HermesProfileKind,
+});
+export type HermesProfile = typeof HermesProfile.Type;
+
+export const HermesProfileDiscoveryResult = Schema.Struct({
+  rootHomePath: TrimmedNonEmptyString,
+  profiles: Schema.Array(HermesProfile),
+  warning: Schema.optional(TrimmedNonEmptyString),
+});
+export type HermesProfileDiscoveryResult = typeof HermesProfileDiscoveryResult.Type;
+
 /**
  * Treat the optional `availability` as "available" when absent. This is
  * the rule legacy producers (which omit the field) and new producers

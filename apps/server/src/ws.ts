@@ -78,6 +78,7 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
+import { discoverHermesProfiles } from "./provider/hermesProfiles.ts";
 import {
   BootstrapCredentialService,
   type BootstrapCredentialChange,
@@ -882,6 +883,20 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
             serverSettings.updateSettings(patch).pipe(Effect.map(redactServerSettingsForClient)),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverDiscoverHermesProfiles]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverDiscoverHermesProfiles,
+            serverSettings.getSettings.pipe(
+              Effect.flatMap((settings) =>
+                discoverHermesProfiles({
+                  configuredHomePath: settings.providers.hermes.homePath,
+                }),
+              ),
+            ),
             {
               "rpc.aggregate": "server",
             },

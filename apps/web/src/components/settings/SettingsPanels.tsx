@@ -63,6 +63,7 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { HermesProfilesSection } from "./HermesProfilesSection";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
   buildProviderInstanceUpdatePatch,
@@ -1322,6 +1323,8 @@ export function ProviderSettingsPanel() {
           );
         })}
       </SettingsSection>
+
+      <HermesProfilesSection settings={settings} updateSettings={updateSettings} />
 
       <AddProviderInstanceDialog
         open={isAddInstanceDialogOpen}

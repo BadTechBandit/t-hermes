@@ -36,6 +36,7 @@ import type {
   ServerSignalProcessResult,
   ServerTraceDiagnosticsResult,
   ServerUpsertKeybindingResult,
+  HermesProfileDiscoveryResult,
 } from "./server.ts";
 import type {
   TerminalClearInput,
@@ -522,6 +523,7 @@ export interface LocalApi {
     removeKeybinding: (input: ServerRemoveKeybindingInput) => Promise<ServerRemoveKeybindingResult>;
     getSettings: () => Promise<ServerSettings>;
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
+    discoverHermesProfiles: () => Promise<HermesProfileDiscoveryResult>;
     discoverSourceControl: () => Promise<SourceControlDiscoveryResult>;
     getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;
     getProcessDiagnostics: () => Promise<ServerProcessDiagnosticsResult>;

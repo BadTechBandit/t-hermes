@@ -143,6 +143,10 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.updateSettings(patch)
           : Promise.reject(unavailableLocalBackendError()),
+      discoverHermesProfiles: () =>
+        rpcClient
+          ? rpcClient.server.discoverHermesProfiles()
+          : Promise.reject(unavailableLocalBackendError()),
       discoverSourceControl: () =>
         rpcClient
           ? rpcClient.server.discoverSourceControl()

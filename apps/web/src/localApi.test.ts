@@ -89,6 +89,7 @@ const rpcClientMock = {
     upsertKeybinding: vi.fn(),
     getSettings: vi.fn(),
     updateSettings: vi.fn(),
+    discoverHermesProfiles: vi.fn(),
     subscribeConfig: vi.fn(),
     subscribeLifecycle: vi.fn(),
     subscribeAuthAccess: vi.fn(),
@@ -565,6 +566,28 @@ describe("wsApi", () => {
     expect(rpcClientMock.server.updateSettings).toHaveBeenCalledWith({
       enableAssistantStreaming: true,
     });
+  });
+
+  it("forwards Hermes profile discovery directly to the RPC client", async () => {
+    const discovery = {
+      rootHomePath: "/Users/example/.hermes",
+      profiles: [
+        {
+          id: "default",
+          name: "default",
+          displayName: "Default",
+          homePath: "/Users/example/.hermes",
+          kind: "default" as const,
+        },
+      ],
+    };
+    rpcClientMock.server.discoverHermesProfiles.mockResolvedValue(discovery);
+    const { createLocalApi } = await import("./localApi");
+
+    const api = createLocalApi(rpcClientMock as never);
+
+    await expect(api.server.discoverHermesProfiles()).resolves.toEqual(discovery);
+    expect(rpcClientMock.server.discoverHermesProfiles).toHaveBeenCalledWith();
   });
 
   it("forwards context menu metadata to the desktop bridge", async () => {

@@ -2806,41 +2806,49 @@ export function ConnectionsSettings() {
           </label>
         </div>
         {savedBackendMode === "hermes-ssh" ? (
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-medium text-foreground">
-                Hermes binary
-              </span>
-              <Input
-                value={remoteHermesBinaryPath}
-                onChange={(event) => setRemoteHermesBinaryPath(event.target.value)}
-                placeholder="hermes"
-                disabled={isAddingSavedBackend}
-                spellCheck={false}
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-medium text-foreground">HERMES_HOME</span>
-              <Input
-                value={remoteHermesHomePath}
-                onChange={(event) => setRemoteHermesHomePath(event.target.value)}
-                placeholder="~/.hermes"
-                disabled={isAddingSavedBackend}
-                spellCheck={false}
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-xs font-medium text-foreground">
-                Remote folder
-              </span>
-              <Input
-                value={remoteHermesRemoteCwd}
-                onChange={(event) => setRemoteHermesRemoteCwd(event.target.value)}
-                placeholder="~"
-                disabled={isAddingSavedBackend}
-                spellCheck={false}
-              />
-            </label>
+          <div className="space-y-2">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-foreground">
+                  Hermes binary
+                </span>
+                <Input
+                  value={remoteHermesBinaryPath}
+                  onChange={(event) => setRemoteHermesBinaryPath(event.target.value)}
+                  placeholder="hermes"
+                  disabled={isAddingSavedBackend}
+                  spellCheck={false}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-foreground">
+                  Profile home
+                </span>
+                <Input
+                  value={remoteHermesHomePath}
+                  onChange={(event) => setRemoteHermesHomePath(event.target.value)}
+                  placeholder="~/.hermes/profiles/coder"
+                  disabled={isAddingSavedBackend}
+                  spellCheck={false}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium text-foreground">
+                  Remote folder
+                </span>
+                <Input
+                  value={remoteHermesRemoteCwd}
+                  onChange={(event) => setRemoteHermesRemoteCwd(event.target.value)}
+                  placeholder="~"
+                  disabled={isAddingSavedBackend}
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Leave profile home blank for the default Hermes profile. Use ~/.hermes/profiles/name
+              for a remote profile.
+            </p>
           </div>
         ) : null}
         {savedBackendError || discoveredSshHostsError ? (

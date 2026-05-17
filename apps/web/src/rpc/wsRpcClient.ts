@@ -127,6 +127,9 @@ export interface WsRpcClient {
     readonly updateSettings: (
       patch: ServerSettingsPatch,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverUpdateSettings>>;
+    readonly discoverHermesProfiles: RpcUnaryNoArgMethod<
+      typeof WS_METHODS.serverDiscoverHermesProfiles
+    >;
     readonly discoverSourceControl: RpcUnaryNoArgMethod<
       typeof WS_METHODS.serverDiscoverSourceControl
     >;
@@ -254,6 +257,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       getSettings: () => transport.request((client) => client[WS_METHODS.serverGetSettings]({})),
       updateSettings: (patch) =>
         transport.request((client) => client[WS_METHODS.serverUpdateSettings]({ patch })),
+      discoverHermesProfiles: () =>
+        transport.request((client) => client[WS_METHODS.serverDiscoverHermesProfiles]({})),
       discoverSourceControl: () =>
         transport.request((client) => client[WS_METHODS.serverDiscoverSourceControl]({})),
       getTraceDiagnostics: () =>
