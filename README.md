@@ -14,6 +14,7 @@ This is a fork, not an official T3 Code release and not an official Hermes relea
 - Local Hermes works through ACP by default.
 - Gateway mode adds Hermes slash commands, skills, model discovery, sessions, reasoning controls, and context usage.
 - Remote Hermes works over SSH against a normal Hermes install on another machine.
+- Hermes Profiles can be added as separate provider choices, each with its own `HERMES_HOME`.
 - Hermes uses its own local config and auth. The app does not edit `~/.hermes`.
 - T-Hermes does not modify Hermes Agent source, install plugins, or rewrite Hermes config.
 - Basic Hermes health checks run with `hermes --version`.
@@ -52,6 +53,12 @@ For Remote Hermes over SSH, the remote machine needs:
 - A remote project folder you want Hermes to work in.
 
 Remote Hermes does not install T-Hermes on the remote machine and does not require the remote T3 backend.
+
+## Download Status
+
+No signed public DMG is attached to GitHub Releases yet.
+
+Developer DMGs can be built locally, and a generated artifact should be published as a GitHub Release asset instead of committed to the repo.
 
 ## Install And Run From Source
 
@@ -92,6 +99,39 @@ T3_HERMES_RUNTIME=gateway bun run dev:desktop
 
 Gateway mode enables the live Hermes command catalog, skills, model options, sessions, reasoning controls, and better context reporting.
 
+## Hermes Skills, Commands, Models, And Reasoning
+
+Gateway mode exposes Hermes' richer runtime surface inside T-Hermes:
+
+- slash commands from the Hermes gateway catalog
+- skills through the Hermes agent runtime
+- model discovery and model switching where Hermes supports it
+- reasoning controls where Hermes exposes them
+- context usage updates for the context meter
+
+ACP remains the stable fallback. Use gateway mode when you want the fuller Hermes feature set.
+
+## Hermes Profiles
+
+Hermes Profiles are separate Hermes homes with separate memory, state, and integrations.
+
+In the app:
+
+```text
+Settings -> Providers -> Hermes -> Hermes Profiles
+```
+
+Click refresh, then add the profile you want. T-Hermes creates a separate provider instance like `Hermes - coder`.
+
+Under the hood, each profile launches Hermes with its own `HERMES_HOME`:
+
+```text
+~/.hermes
+~/.hermes/profiles/<name>
+```
+
+T-Hermes does not run `hermes profile use` and does not edit Hermes config.
+
 ## Remote Hermes Over SSH
 
 Use this when Hermes is installed on another machine.
@@ -107,6 +147,14 @@ Enter the SSH host, username, optional port, and the remote project folder. T-He
 Remote Hermes is separate from generic T3 remote environments. It does not run `t-hermes`, `npm`, `npx`, or a remote T3 backend.
 
 SSH keys or an active SSH agent are recommended. The app handles host-key review before using a strict known-hosts file for Remote Hermes commands.
+
+For a remote Hermes profile, set Profile home to:
+
+```text
+~/.hermes/profiles/<name>
+```
+
+Leave Profile home blank for the remote default profile.
 
 ### Electron Postinstall On Hardened npm Setups
 
@@ -150,6 +198,7 @@ Steps:
 7. Run `bun run dev:desktop`.
 8. If the app launches but Hermes is not detected, run `command -v hermes` and set that absolute path as the Hermes provider Binary path in the app settings.
 9. For Remote Hermes, open Settings -> Connections -> Add environment -> Remote Hermes and enter the SSH host plus remote project folder.
+10. For Hermes Profiles, open Settings -> Providers -> Hermes -> Hermes Profiles and add the profile as a separate provider. For a remote profile, set Profile home to `~/.hermes/profiles/<name>`.
 
 Do not edit `~/.hermes`. T-Hermes should use the existing Hermes install and config. Do not install Hermes plugins.
 ```
@@ -182,6 +231,8 @@ bun run dist:desktop:dmg:x64
 ```
 
 These builds are unsigned unless you set up Apple signing and notarization. macOS may warn before opening them.
+
+Do not commit generated DMG/ZIP files. The `release/` folder is ignored. Publish release artifacts through GitHub Releases.
 
 Auto-updates are disabled in this fork until T-Hermes has its own signed release channel. That avoids accidentally pulling official T3 Code updates into this fork.
 
